@@ -1,0 +1,112 @@
+// Day scoring, floor-hit streak, and weekly aggregation.
+import { fromISO, dayIndex, todayISO, addDaysISO, weekDates } from './time.js';
+
+// A task counts as done if its tick is set, or (for countable tasks) the logged
+// quantity reaches its target.
+export function isTaskDone(task, entry) {
+  if (!entry) return false;
+  if (task.countable) return (Number(entry.qty) || 0) >= (Number(task.target) || 1);
+  return !!entry.done;
+}
+
+// Score a single date.
+//   floor met (golden list + all floor tasks done) => 100% + bonus from ceiling items
+//   floor not met                                   => proportional, always below 100%
+// Bonus is split evenly across the day's ceiling tasks and capped so the total never
+// exceeds 150%.
+export function dayScore(state, iso) {
+  const di = dayIndex(fromISO(iso));
+  const dlog = state.log[iso] || { golden: {}, tasks: {} };
+  const golden = state.golden;
+  const floorTasks = state.tasks.filter((t) => t.day === di && t.kind === 'floor');
+  const ceilTasks = state.tasks.filter((t) => t.day === di && t.kind === 'ceiling');
+
+  const goldenDone = golden.filter((g) => dlog.golden?.[g.id]).length;
+  const floorTasksDone = floorTasks.filter((t) => isTaskDone(t, dlog.tasks?.[t.id])).length;
+
+  const floorTotal = golden.length + floorTasks.length;
+  const floorDone = goldenDone + floorTasksDone;
+  const floorMet = floorTotal > 0 && floorDone === floorTotal;
+
+  const ceilTotal = ceilTasks.length;
+  const ceilDone = ceilTasks.filter((t) => isTaskDone(t, dlog.tasks?.[t.id])).length;
+
+  let score;
+  if (floorMet) {
+    score = 100 + (ceilTotal > 0 ? (ceilDone / ceilTotal) * 50 : 0);
+  } else {
+    score = floorTotal > 0 ? (floorDone / floorTotal) * 100 : 0;
+  }
+
+  return {
+    score: Math.min(150, Math.round(score)),
+    floorMet,
+    floorDone,
+    floorTotal,
+    ceilDone,
+    ceilTotal,
+    hasItems: floorTotal > 0 || ceilTotal > 0,
+  };
+}
+
+// Consecutive days the floor was met, counting back from `endISO`. The current day is
+// treated leniently (if not yet met it's skipped, not counted as a break) so an
+// in-progress today doesn't zero out the streak.
+export function floorStreak(state, endISO = todayISO()) {
+  let streak = 0;
+  let iso = endISO;
+
+  const today = dayScore(state, iso);
+  if (today.floorMet) streak += 1;
+  iso = addDaysISO(iso, -1);
+
+  for (let i = 0; i < 366; i += 1) {
+    const s = dayScore(state, iso);
+    if (s.floorMet) {
+      streak += 1;
+      iso = addDaysISO(iso, -1);
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+// Aggregate one week (Mon..Sun). Averages only over days that actually had planned items.
+export function weekSummary(state, anyISO) {
+  const dates = weekDates(fromISO(anyISO));
+  const scored = dates.map((iso) => ({ iso, ...dayScore(state, iso) }));
+  const active = scored.filter((s) => s.hasItems);
+  const avg = active.length
+    ? Math.round(active.reduce((a, s) => a + s.score, 0) / active.length)
+    : 0;
+  const floorHits = active.filter((s) => s.floorMet).length;
+  const floorRate = active.length ? Math.round((floorHits / active.length) * 100) : 0;
+  return { dates, scored, avg, floorHits, activeDays: active.length, floorRate };
+}
+
+// "Done" for each user-defined target this week, computed from tasks via the
+// target's category + metric.
+//   hours    -> sum of completed task hours in the category
+//   sessions -> count of completed tasks in the category
+//   count    -> sum of logged quantities for countable tasks in the category
+export function targetActuals(state, anyISO) {
+  const dates = weekDates(fromISO(anyISO));
+  const nameOf = (id) => (state.priorities.find((p) => p.id === id) || {}).name || '—';
+
+  return state.targets.map((tgt) => {
+    let done = 0;
+    for (const iso of dates) {
+      const di = dayIndex(fromISO(iso));
+      const dlog = state.log[iso] || { tasks: {} };
+      for (const t of state.tasks.filter((tk) => tk.day === di && tk.categoryId === tgt.categoryId)) {
+        const entry = dlog.tasks?.[t.id];
+        const isDone = isTaskDone(t, entry);
+        if (tgt.metric === 'hours' && isDone) done += Number(t.hours) || 0;
+        else if (tgt.metric === 'sessions' && isDone) done += 1;
+        else if (tgt.metric === 'count' && t.countable && entry) done += Number(entry.qty) || 0;
+      }
+    }
+    return { ...tgt, done, categoryName: nameOf(tgt.categoryId) };
+  });
+}

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#020617"/>
+  <!-- shield: protecting the floor -->
+  <path d="M256 96l128 44v108c0 86-54 150-128 180-74-30-128-94-128-180V140l128-44z"
+        fill="none" stroke="#34d399" stroke-width="22" stroke-linejoin="round"/>
+  <!-- floor line -->
+  <line x1="170" y1="300" x2="342" y2="300" stroke="#fbbf24" stroke-width="20" stroke-linecap="round"/>
+  <!-- check above the floor -->
+  <path d="M196 232l40 42 84-92" fill="none" stroke="#34d399" stroke-width="26"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

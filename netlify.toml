@@ -1,0 +1,10 @@
+# Netlify deployment config for the Reality Planner SPA.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single-page app: send every route back to index.html so the client handles it.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
