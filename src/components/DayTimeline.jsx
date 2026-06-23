@@ -1,17 +1,18 @@
 // The big visual day board. Renders commitments + tasks on a time grid.
-// Interactive mode: drag a block to a time (mouse/pen, snaps to 30-min, no
-// overlaps), drag it off the side to remove it, and tap a block to edit it.
-// Touch devices tap to edit. Library items can be dropped on directly.
+// Interactive mode (mouse, pen AND touch): drag a block to a time (snaps to
+// 30-min, no overlaps), drag it off the side to remove it, and tap a block to
+// edit it. Library items can be dropped on directly (mouse via HTML5 DnD; touch
+// via the pointer-based drag handled in the Planner).
 import { useRef, useState } from 'react';
 import { useStore } from '../store.jsx';
 import { dayLayout, findDropStart, occupiedRanges, wakingWindow, SNAP_MIN } from '../lib/timeline.js';
-import { DAYS, clockLabel, prettyClock, hrs, minToHHMM, toMinutes, blockHours, addClock, dayIndex } from '../lib/time.js';
+import { DAYS, clockLabel, prettyClock, hrs, minToHHMM, toMinutes, blockHours, addClock, weekKey, addDaysISO, todayISO } from '../lib/time.js';
 import { tint } from '../lib/colors.js';
 import { Modal, Btn, TextInput, NumberInput, Select, Label } from './ui.jsx';
 
-export default function DayBoard({ di, interactive = false }) {
+export default function DayBoard({ di, interactive = false, dragHighlight = false, weekStart = weekKey(new Date()) }) {
   const { state, actions } = useStore();
-  const layout = dayLayout(state, di);
+  const layout = dayLayout(state, di, weekStart);
   const PPH = interactive ? 38 : 34; // pixels per hour (compact)
   const { W0, W1, span, blocks, marks } = layout;
 
@@ -33,9 +34,11 @@ export default function DayBoard({ di, interactive = false }) {
     editItem?.type === 'commitment' ? state.commitments.find((c) => c.id === editItem.id) : null;
   if (editItem && !editTask && !editCommit) setEditItem(null);
 
-  // Drag an existing task/commitment block: move to a time, or off the side to remove.
+  // Drag an existing task/commitment block: move to a time, or off the side to
+  // remove. Works for mouse, pen and touch (blocks set touch-action:none so the
+  // page doesn't scroll mid-drag; a small movement threshold keeps tap = edit).
   const startDrag = (e, b) => {
-    if (!interactive || e.pointerType === 'touch') return; // touch falls back to tap
+    if (!interactive) return;
     const isCommit = b.type === 'commitment';
     const id = isCommit ? b.id : b.taskId;
     let durMin;
@@ -57,36 +60,40 @@ export default function DayBoard({ di, interactive = false }) {
     const downY = e.clientY;
     draggedRef.current = false;
 
-    const isOff = (ev) => {
+    // Remove intent: dragged off the side (easy with a mouse), or — on touch,
+    // where the screen edges are awkward — dropped onto the bottom "bin" bar.
+    const isTouch = e.pointerType === 'touch';
+    const wantRemove = (ev) => {
+      if (isTouch && ev.clientY > window.innerHeight - 88) return true;
       const rect = gridRef.current.getBoundingClientRect();
       return ev.clientX < rect.left - 6 || ev.clientX > rect.right + 6;
     };
 
     const move = (ev) => {
       if (Math.abs(ev.clientX - downX) > 4 || Math.abs(ev.clientY - downY) > 4) draggedRef.current = true;
-      if (isOff(ev)) {
-        setDrag({ id, durMin, remove: true });
+      if (wantRemove(ev)) {
+        setDrag({ id, durMin, remove: true, touch: isTouch });
         return;
       }
       const snapped = Math.round((yToMin(ev.clientY) - grab) / SNAP_MIN) * SNAP_MIN;
-      const occ = occupiedRanges(state, di, id);
+      const occ = occupiedRanges(state, di, id, weekStart);
       const clamped = Math.max(W0, Math.min(W1 - durMin, snapped));
       const fits =
         clamped >= W0 &&
         clamped + durMin <= W1 &&
         !occ.some((r) => clamped < r.end - 0.01 && clamped + durMin > r.start + 0.01);
-      setDrag({ id, durMin, previewMin: clamped, valid: fits, remove: false });
+      setDrag({ id, durMin, previewMin: clamped, valid: fits, remove: false, touch: isTouch });
     };
     const up = (ev) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       if (draggedRef.current) {
-        if (isOff(ev)) {
+        if (wantRemove(ev)) {
           if (isCommit) actions.removeCommitment(id);
           else actions.removeTask(id);
         } else {
           const desired = yToMin(ev.clientY) - grab;
-          const slot = findDropStart(state, di, id, desired, durMin);
+          const slot = findDropStart(state, di, id, desired, durMin, weekStart);
           if (slot != null) {
             const startHHMM = minToHHMM(slot);
             if (isCommit) actions.updateCommitment(id, { start: startHHMM, end: addClock(startHHMM, durMin / 60) });
@@ -131,14 +138,14 @@ export default function DayBoard({ di, interactive = false }) {
     if (taskTpl) {
       const tpl = state.templates.find((x) => x.id === taskTpl);
       const dur = (Number(tpl?.hours) || 0) * 60;
-      const slot = findDropStart(state, di, null, desired, dur);
-      actions.addTaskFromTemplate(taskTpl, di, slot != null ? minToHHMM(slot) : null);
+      const slot = findDropStart(state, di, null, desired, dur, weekStart);
+      actions.addTaskFromTemplate(taskTpl, di, slot != null ? minToHHMM(slot) : null, weekStart);
     } else {
       const tpl = state.commitmentTemplates.find((x) => x.id === cmtTpl);
       const dur = (Number(tpl?.hours) || 0) * 60;
       const snapped = Math.round(desired / SNAP_MIN) * SNAP_MIN;
       const clamped = Math.max(W0, Math.min(Math.max(W0, W1 - dur), snapped));
-      actions.addCommitmentFromTemplate(cmtTpl, di, minToHHMM(clamped));
+      actions.addCommitmentFromTemplate(cmtTpl, di, minToHHMM(clamped), weekStart);
     }
   };
 
@@ -161,11 +168,13 @@ export default function DayBoard({ di, interactive = false }) {
         {/* track */}
         <div
           ref={gridRef}
+          data-drop-day={di}
+          data-drop-past={interactive ? '0' : '1'}
           onDragOver={onDragOver}
           onDragLeave={() => setDropMin(null)}
           onDrop={onDrop}
           className={`relative flex-1 overflow-hidden rounded-xl border bg-slate-950/40 ${
-            dropMin != null ? 'border-emerald-400' : 'border-slate-800'
+            dropMin != null || dragHighlight ? 'border-emerald-400' : 'border-slate-800'
           }`}
           style={{ height: h(span) }}
         >
@@ -204,7 +213,7 @@ export default function DayBoard({ di, interactive = false }) {
                   onPointerDown={(e) => startDrag(e, b)}
                   onClick={() => onBlockClick(b)}
                   className={`absolute inset-x-1 flex items-center gap-1 overflow-hidden rounded-md border border-slate-600/60 bg-slate-700/40 px-2 ${
-                    interactive ? 'cursor-pointer select-none' : ''
+                    interactive ? 'cursor-pointer select-none touch-none' : ''
                   }`}
                   style={style}
                 >
@@ -223,7 +232,7 @@ export default function DayBoard({ di, interactive = false }) {
                 onPointerDown={(e) => startDrag(e, b)}
                 onClick={() => onBlockClick(b)}
                 className={`absolute inset-x-1 flex items-center overflow-hidden rounded-md px-2 ${
-                  interactive ? 'cursor-pointer select-none' : ''
+                  interactive ? 'cursor-pointer select-none touch-none' : ''
                 }`}
                 style={{
                   ...style,
@@ -276,9 +285,20 @@ export default function DayBoard({ di, interactive = false }) {
         </div>
       </div>
 
+      {/* Touch: a reachable bin pinned to the bottom of the screen while dragging. */}
+      {drag?.touch && (
+        <div
+          className={`pointer-events-none fixed inset-x-0 bottom-0 z-50 flex items-center justify-center gap-2 py-5 text-sm font-semibold transition-colors ${
+            drag.remove ? 'bg-rose-500 text-white' : 'bg-slate-800/95 text-slate-300'
+          }`}
+        >
+          🗑 {drag.remove ? 'Release to remove' : 'Drag here to remove'}
+        </div>
+      )}
+
       {interactive && (
         <p className="mt-2 text-[11px] text-slate-500">
-          Tap to edit · drag to set a time · drag off the side to remove · drop a saved item here
+          Tap to edit · drag to set a time · drag to the bin to remove · drop a saved item here
         </p>
       )}
 
@@ -294,7 +314,7 @@ function TaskEditor({ task, di, onClose }) {
   const { state, actions } = useStore();
   const { W0, W1 } = wakingWindow(state, di);
   const durMin = (Number(task.hours) || 0) * 60;
-  const occ = occupiedRanges(state, di, task.id);
+  const occ = occupiedRanges(state, di, task.id, task.weekStart);
   const fits = (s, dur) =>
     s >= W0 && s + dur <= W1 && !occ.some((r) => s < r.end - 0.01 && s + dur > r.start + 0.01);
 
@@ -310,7 +330,7 @@ function TaskEditor({ task, di, onClose }) {
     if (task.start) {
       const s = toMinutes(task.start);
       if (!fits(s, newDur)) {
-        const slot = findDropStart(state, di, task.id, s, newDur);
+        const slot = findDropStart(state, di, task.id, s, newDur, task.weekStart);
         patch.start = slot != null ? minToHHMM(slot) : null;
       }
     }
@@ -321,7 +341,7 @@ function TaskEditor({ task, di, onClose }) {
     const patch = { day: nd };
     if (task.start) {
       const s = toMinutes(task.start);
-      const slot = findDropStart(state, nd, task.id, s, durMin);
+      const slot = findDropStart(state, nd, task.id, s, durMin, task.weekStart);
       patch.start = slot != null ? minToHHMM(slot) : null;
     }
     actions.updateTask(task.id, patch);
@@ -395,7 +415,7 @@ function TaskEditor({ task, di, onClose }) {
 
 function CommitmentEditor({ commitment, di, onClose }) {
   const { actions } = useStore();
-  const todayIdx = dayIndex(new Date());
+  const wk = commitment.weekStart || weekKey(new Date());
   const durHrs = blockHours(commitment.start, commitment.end);
 
   const setStart = (hhmm) => {
@@ -433,7 +453,7 @@ function CommitmentEditor({ commitment, di, onClose }) {
             value={commitment.day}
             onChange={(e) => actions.updateCommitment(commitment.id, { day: Number(e.target.value) })}
           >
-            {DAYS.map((d, i) => (i < todayIdx ? null : (
+            {DAYS.map((d, i) => (addDaysISO(wk, i) < todayISO() ? null : (
               <option key={d} value={i}>
                 {d}
               </option>

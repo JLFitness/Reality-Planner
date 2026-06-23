@@ -1,7 +1,20 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useStore } from '../store.jsx';
-import { DAYS, DAY_LONG, dayIndex, hrs, prettyClock, toMinutes } from '../lib/time.js';
+import {
+  DAYS,
+  DAY_LONG,
+  dayIndex,
+  hrs,
+  prettyClock,
+  toMinutes,
+  todayISO,
+  addDaysISO,
+  weekKey,
+  fromISO,
+  mondayOf,
+} from '../lib/time.js';
 import { plannerStats, cutSuggestions } from '../lib/planner.js';
+import { weekCommitments, isSleep } from '../lib/week.js';
 import { dayBreakdown, spareLabel } from '../lib/timeline.js';
 import { categoryColor, tint } from '../lib/colors.js';
 import DayBoard from '../components/DayTimeline.jsx';
@@ -25,21 +38,79 @@ const RATING_STYLE = {
 };
 
 export default function Planner() {
-  const { state } = useStore();
-  const stats = plannerStats(state);
+  const { state, actions } = useStore();
+  // Which week we're planning. `wk` is that week's Monday ISO.
+  const [weekAnchor, setWeekAnchor] = useState(todayISO());
+  const wk = weekKey(fromISO(weekAnchor));
+  const isThisWeek = wk === weekKey(new Date());
+  const stats = plannerStats(state, wk);
   const [selectedDay, setSelectedDay] = useState(dayIndex(new Date()));
   // pending = a template waiting to be tapped onto a day: { kind:'task'|'commitment', id }
   const [pending, setPending] = useState(null);
+  // Touch drag of a library item onto a day. (Mouse uses native HTML5 DnD.)
+  // { kind, id, name, color, x, y, overDi }
+  const [libDrag, setLibDrag] = useState(null);
+  const libDraggedRef = useRef(false);
+
+  const startLibDrag = (e, item) => {
+    if (e.pointerType !== 'touch') return; // desktop keeps HTML5 drag-and-drop
+    const startX = e.clientX;
+    const startY = e.clientY;
+    libDraggedRef.current = false;
+    let active = false;
+
+    // Which day (bar or board) is under the finger, if any and not locked.
+    const dayUnder = (x, y) => {
+      const zone = document.elementFromPoint(x, y)?.closest('[data-drop-day]');
+      if (!zone || zone.dataset.dropPast === '1') return null;
+      return Number(zone.dataset.dropDay);
+    };
+
+    const move = (ev) => {
+      if (!active) {
+        if (Math.abs(ev.clientX - startX) < 6 && Math.abs(ev.clientY - startY) < 6) return;
+        active = true;
+        libDraggedRef.current = true;
+      }
+      setLibDrag({ ...item, x: ev.clientX, y: ev.clientY, overDi: dayUnder(ev.clientX, ev.clientY) });
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      if (active) {
+        const di = dayUnder(ev.clientX, ev.clientY);
+        if (di != null) {
+          if (item.kind === 'task') actions.addTaskFromTemplate(item.id, di, null, wk);
+          else actions.addCommitmentFromTemplate(item.id, di, null, wk);
+          setSelectedDay(di);
+        }
+      }
+      setLibDrag(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 anim-fade-in">
       <header>
         <h1 className="text-2xl font-bold">Weekly Planner</h1>
         <p className="text-sm text-slate-400">Plan a week you can actually live.</p>
       </header>
 
-      <Headline stats={stats} />
-      <Cuts />
+      <WeekNav
+        wk={wk}
+        isThisWeek={isThisWeek}
+        onPrev={() => setWeekAnchor(addDaysISO(weekAnchor, -7))}
+        onNext={() => setWeekAnchor(addDaysISO(weekAnchor, 7))}
+        onCopyNext={() => {
+          actions.copyWeekToNext(wk);
+          setWeekAnchor(addDaysISO(weekAnchor, 7));
+        }}
+      />
+
+      <Headline stats={stats} isThisWeek={isThisWeek} />
+      <Cuts wk={wk} />
 
       {/* Desktop: pick days & pull from libraries on the left, day board pinned on
           the right so it stays in view. Mobile: everything stacks in order. */}
@@ -51,43 +122,100 @@ export default function Planner() {
           >
             <WeekOverview
               stats={stats}
+              wk={wk}
               selectedDay={selectedDay}
               setSelectedDay={setSelectedDay}
               pending={pending}
               setPending={setPending}
+              libDragOverDi={libDrag?.overDi}
             />
             <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
-              <Library kind="task" pending={pending} setPending={setPending} />
-              <Library kind="commitment" pending={pending} setPending={setPending} />
+              <Library kind="task" pending={pending} setPending={setPending} startLibDrag={startLibDrag} draggedRef={libDraggedRef} />
+              <Library kind="commitment" pending={pending} setPending={setPending} startLibDrag={startLibDrag} draggedRef={libDraggedRef} />
             </div>
           </Panel>
         </div>
 
         {/* The day board — pinned beside the controls on desktop */}
         <div className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:sticky lg:top-16">
-          <DayCard di={selectedDay} stats={stats} />
+          <DayCard di={selectedDay} stats={stats} wk={wk} dragHighlight={libDrag?.overDi === selectedDay} />
         </div>
 
         <div className="space-y-4 lg:col-start-1 lg:row-start-2">
           <Panel collapsible persistKey="planner-commitments" title="Fixed commitments" subtitle="Immovable blocks: work, meals, training">
-            <Commitments />
+            <Commitments wk={wk} />
           </Panel>
           <Panel collapsible persistKey="planner-tasks" title="This week's tasks" subtitle="Tap a row for duration & notes">
-            <Tasks selectedDay={selectedDay} />
+            <Tasks selectedDay={selectedDay} wk={wk} />
           </Panel>
         </div>
       </div>
+
+      {/* Finger-following preview while dragging a library item (touch). */}
+      {libDrag && (
+        <div
+          className="pointer-events-none fixed z-50 flex items-center gap-2 rounded-xl border border-slate-500 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 shadow-xl"
+          style={{ left: libDrag.x, top: libDrag.y, transform: 'translate(-50%, -130%)' }}
+        >
+          {libDrag.kind === 'task' ? <Dot color={libDrag.color} /> : <span>🔒</span>}
+          {libDrag.name}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- week nav */
+
+function WeekNav({ wk, isThisWeek, onPrev, onNext, onCopyNext }) {
+  const mon = fromISO(wk);
+  const sun = fromISO(addDaysISO(wk, 6));
+  const label = `${mon.getDate()}/${mon.getMonth() + 1} – ${sun.getDate()}/${sun.getMonth() + 1}`;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <IconBtn aria-label="Previous week" onClick={onPrev}>
+          ‹
+        </IconBtn>
+        <div className="text-center">
+          <div className="text-sm font-bold">{isThisWeek ? 'This week' : 'Week of'}</div>
+          <div className="text-xs text-slate-400">{label}</div>
+        </div>
+        <IconBtn aria-label="Next week" onClick={onNext}>
+          ›
+        </IconBtn>
+      </div>
+      <button
+        onClick={onCopyNext}
+        title="Copy this week's plan into next week"
+        className="group flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 text-sm font-semibold text-emerald-300 transition hover:border-emerald-400 hover:bg-emerald-500/20 active:scale-[.99]"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V5a2 2 0 0 1 2-2h8" />
+        </svg>
+        Copy this week to next
+        <span className="transition group-hover:translate-x-0.5">→</span>
+      </button>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- headline */
 
-function Headline({ stats }) {
+function Headline({ stats, isThisWeek }) {
   const r = RATING_STYLE[stats.rating];
   const room = stats.remaining.leftover;
   const overloaded = room < -0.05;
-  const restOfWeek = stats.todayIdx > 0;
+  const restOfWeek = isThisWeek && stats.days.some((d) => d.past);
   return (
     <Card className={`border p-5 ${r.ring}`}>
       <div className="text-xs uppercase tracking-wide text-slate-400">
@@ -109,15 +237,15 @@ function Headline({ stats }) {
 
 /* -------------------------------------------------------------------- cuts */
 
-function Cuts() {
+function Cuts({ wk }) {
   const { state, actions } = useStore();
-  const { cuts, freed, enough } = cutSuggestions(state);
+  const { cuts, freed, enough } = cutSuggestions(state, wk);
   if (!cuts.length) return null;
   return (
     <Card className="border border-rose-500/40 bg-rose-500/5 p-4">
       <div className="font-semibold text-rose-300">Overloaded — suggested cuts</div>
       <p className="mt-0.5 text-xs text-slate-400">
-        From the bottom of your priorities up. Golden &amp; floor items are never cut.
+        From the bottom of your priorities up. Golden &amp; mandatory items are never cut.
       </p>
       <ul className="mt-3 space-y-2">
         {cuts.map((t) => (
@@ -145,13 +273,13 @@ function Cuts() {
 
 /* ------------------------------------------------------------ week overview */
 
-function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending }) {
+function WeekOverview({ stats, wk, selectedDay, setSelectedDay, pending, setPending, libDragOverDi }) {
   const { state, actions } = useStore();
   const [dragDay, setDragDay] = useState(null);
 
   const place = (di) => {
-    if (pending?.kind === 'task') actions.addTaskFromTemplate(pending.id, di);
-    else if (pending?.kind === 'commitment') actions.addCommitmentFromTemplate(pending.id, di);
+    if (pending?.kind === 'task') actions.addTaskFromTemplate(pending.id, di, null, wk);
+    else if (pending?.kind === 'commitment') actions.addCommitmentFromTemplate(pending.id, di, null, wk);
     setPending(null);
     setSelectedDay(di);
   };
@@ -160,8 +288,8 @@ function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending 
     e.preventDefault();
     const tt = e.dataTransfer.getData('text/tasktpl');
     const ct = e.dataTransfer.getData('text/cmttpl');
-    if (tt) actions.addTaskFromTemplate(tt, di);
-    else if (ct) actions.addCommitmentFromTemplate(ct, di);
+    if (tt) actions.addTaskFromTemplate(tt, di, null, wk);
+    else if (ct) actions.addCommitmentFromTemplate(ct, di, null, wk);
     if (tt || ct) setSelectedDay(di);
     setDragDay(null);
   };
@@ -174,7 +302,7 @@ function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending 
         </div>
       )}
       {stats.days.map((d) => {
-        const segs = dayBreakdown(state, d.di);
+        const segs = dayBreakdown(state, d.di, wk);
         const planned = d.planned * 60;
         const scaleMax = Math.max(d.available * 60, planned, 1);
         const active = selectedDay === d.di;
@@ -183,6 +311,8 @@ function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending 
         return (
           <button
             key={d.di}
+            data-drop-day={d.di}
+            data-drop-past={past ? '1' : '0'}
             onClick={() => (past ? setSelectedDay(d.di) : place(d.di))}
             onDragOver={(e) => {
               if (past) return;
@@ -200,13 +330,19 @@ function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending 
             title={past ? 'This day has passed — locked' : undefined}
             className={`flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition ${
               active ? 'border-slate-500 bg-slate-800/60' : 'border-transparent hover:bg-slate-800/40'
-            } ${dragDay === d.di ? 'ring-2 ring-emerald-400' : ''} ${past ? 'opacity-50' : ''}`}
+            } ${dragDay === d.di || libDragOverDi === d.di ? 'ring-2 ring-emerald-400' : ''} ${
+              past ? 'opacity-50' : ''
+            }`}
           >
             <span className="w-8 shrink-0 text-xs font-medium text-slate-300">{d.name}</span>
             <span className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-slate-800">
               <span className="flex h-full">
                 {segs.map((sg) => (
-                  <span key={sg.categoryId} style={{ width: `${(sg.minutes / scaleMax) * 100}%`, backgroundColor: sg.color }} />
+                  <span
+                    key={sg.categoryId}
+                    className="transition-[width] duration-500 ease-out"
+                    style={{ width: `${(sg.minutes / scaleMax) * 100}%`, backgroundColor: sg.color }}
+                  />
                 ))}
               </span>
               {!past && (
@@ -232,7 +368,7 @@ function WeekOverview({ stats, selectedDay, setSelectedDay, pending, setPending 
 
 /* --------------------------------------------------------------- libraries */
 
-function Library({ kind, pending, setPending }) {
+function Library({ kind, pending, setPending, startLibDrag, draggedRef }) {
   const { state } = useStore();
   const isTask = kind === 'task';
   const items = isTask ? state.templates : state.commitmentTemplates;
@@ -254,8 +390,16 @@ function Library({ kind, pending, setPending }) {
                 key={t.id}
                 draggable
                 onDragStart={(e) => e.dataTransfer.setData(dndKey, t.id)}
-                onClick={() => setPending(sel ? null : { kind, id: t.id })}
-                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                onPointerDown={(e) => startLibDrag(e, { kind, id: t.id, name: t.name || 'Untitled', color })}
+                onClick={() => {
+                  // Ignore the click the browser fires at the end of a touch drag.
+                  if (draggedRef.current) {
+                    draggedRef.current = false;
+                    return;
+                  }
+                  setPending(sel ? null : { kind, id: t.id });
+                }}
+                className={`flex touch-none items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
                   sel ? 'border-emerald-400 ring-1 ring-emerald-400' : 'border-slate-700 hover:border-slate-500'
                 }`}
                 style={{ backgroundColor: tint(color, 0.14) }}
@@ -266,7 +410,7 @@ function Library({ kind, pending, setPending }) {
                   <span className="block text-[11px] text-slate-400">
                     {hrs(t.hours)}h
                     {isTask
-                      ? ` · ${t.kind === 'floor' ? 'Floor' : 'Bonus'}${t.countable ? ' · countable' : ''}`
+                      ? ` · ${t.kind === 'floor' ? 'Mandatory' : 'Bonus'}${t.countable ? ' · countable' : ''}`
                       : t.start
                         ? ` · ${t.start}`
                         : ''}
@@ -283,14 +427,14 @@ function Library({ kind, pending, setPending }) {
 
 /* --------------------------------------------------------------- day card */
 
-function DayCard({ di, stats }) {
+function DayCard({ di, stats, wk, dragHighlight = false }) {
   const { state } = useStore();
   const d = stats.days[di];
   const over = d.leftover < -0.05;
   const past = d.past;
   const hasItems =
-    state.tasks.some((t) => t.day === di) ||
-    state.commitments.some((c) => c.day === di && !/sleep/i.test(c.label || ''));
+    state.tasks.some((t) => t.day === di && t.weekStart === wk) ||
+    weekCommitments(state.commitments, di, wk, state.settings.repeatCommitments).some((c) => !isSleep(c));
   return (
     <Panel title={DAY_LONG[di]} subtitle={`${hrs(d.committed)}h committed · ${hrs(d.planned)}h planned`}>
       <div className="mb-3 flex items-center justify-between">
@@ -304,13 +448,15 @@ function DayCard({ di, stats }) {
         <span className="text-xs text-slate-500">waking hours</span>
       </div>
       {hasItems ? (
-        <DayBoard di={di} interactive={!past} />
+        <DayBoard di={di} interactive={!past} dragHighlight={dragHighlight} weekStart={wk} />
       ) : (
-        <Empty>
-          {past
-            ? 'This day has passed — nothing was planned.'
-            : 'Nothing on this day yet — drag a task or commitment onto it above.'}
-        </Empty>
+        <div data-drop-day={di} data-drop-past={past ? '1' : '0'}>
+          <Empty>
+            {past
+              ? 'This day has passed — nothing was planned.'
+              : 'Nothing on this day yet — drag a task or commitment onto it above.'}
+          </Empty>
+        </div>
       )}
       <Legend />
     </Panel>
@@ -333,22 +479,25 @@ function Legend() {
 
 /* -------------------------------------------------------------- commitments */
 
-function Commitments() {
+function Commitments({ wk }) {
   const { state, actions } = useStore();
-  const todayIdx = dayIndex(new Date());
+  const today = todayISO();
+  const repeat = state.settings.repeatCommitments;
+  // First day of the viewed week that hasn't passed (-1 = whole week is in the past).
+  const minDay = DAYS.findIndex((_, di) => addDaysISO(wk, di) >= today);
   const [label, setLabel] = useState('');
-  const [day, setDay] = useState(todayIdx);
+  const [day, setDay] = useState(dayIndex(new Date()));
   const [start, setStart] = useState('09:00');
   const [end, setEnd] = useState('17:00');
 
   const add = () => {
-    if (!label.trim() || Number(day) < todayIdx) return;
-    actions.addCommitment({ label: label.trim(), day: Number(day), start, end });
+    if (!label.trim() || addDaysISO(wk, Number(day)) < today) return;
+    actions.addCommitment({ label: label.trim(), day: Number(day), start, end, weekStart: wk });
     setLabel('');
   };
 
-  const list = [...state.commitments]
-    .filter((c) => !/sleep/i.test(c.label || ''))
+  const list = state.commitments
+    .filter((c) => !isSleep(c) && (repeat || c.weekStart === wk))
     .sort((a, b) => a.day - b.day || a.start.localeCompare(b.start));
 
   return (
@@ -357,7 +506,7 @@ function Commitments() {
       <div className="grid grid-cols-3 gap-2">
         <div>
           <Label>Day</Label>
-          <DaySelect value={day} onChange={setDay} fromIdx={todayIdx} />
+          <DaySelect value={day} onChange={setDay} fromIdx={minDay === -1 ? 7 : minDay} />
         </div>
         <div>
           <Label>Start</Label>
@@ -377,7 +526,7 @@ function Commitments() {
       ) : (
         <ul className="divide-y divide-slate-800">
           {list.map((c) => {
-            const past = c.day < todayIdx;
+            const past = addDaysISO(wk, c.day) < today;
             return (
               <li
                 key={c.id}
@@ -409,7 +558,7 @@ function Commitments() {
 
 /* --------------------------------------------------------------------- tasks */
 
-function Tasks({ selectedDay }) {
+function Tasks({ selectedDay, wk }) {
   const { state, actions } = useStore();
   const [open, setOpen] = useState({});
   const [title, setTitle] = useState('');
@@ -428,14 +577,15 @@ function Tasks({ selectedDay }) {
       countable: false,
       notes: '',
       start: null,
+      weekStart: wk,
     });
     setTitle('');
     setHours('1');
   };
 
-  const tasks = [...state.tasks].sort((a, b) => a.day - b.day);
-  const todayIdx = dayIndex(new Date());
-  const addPast = selectedDay < todayIdx;
+  const today = todayISO();
+  const tasks = state.tasks.filter((t) => t.weekStart === wk).sort((a, b) => a.day - b.day);
+  const addPast = addDaysISO(wk, selectedDay) < today;
 
   return (
     <div className="space-y-3">
@@ -445,7 +595,7 @@ function Tasks({ selectedDay }) {
         <ul className="space-y-2">
           {tasks.map((t) => {
             const isOpen = !!open[t.id];
-            const past = t.day < todayIdx;
+            const past = addDaysISO(wk, t.day) < today;
 
             // Past-day tasks are locked: read-only, no controls.
             if (past) {
@@ -493,7 +643,7 @@ function Tasks({ selectedDay }) {
                         {catName(state, t.categoryId)} · {hrs(t.hours)}h{t.countable ? ` · ×${t.target}` : ''}
                         {' · '}
                         <span className={t.kind === 'floor' ? 'text-emerald-400/80' : 'text-sky-400/80'}>
-                          {t.kind === 'floor' ? 'Floor' : 'Bonus'}
+                          {t.kind === 'floor' ? 'Mandatory' : 'Bonus'}
                         </span>
                       </span>
                     </span>
@@ -534,7 +684,7 @@ function Tasks({ selectedDay }) {
                               : 'bg-sky-600/20 text-sky-300'
                           }`}
                         >
-                          {t.kind === 'floor' ? 'Floor' : 'Bonus'}
+                          {t.kind === 'floor' ? 'Mandatory' : 'Bonus'}
                         </button>
                       </label>
                     </div>
@@ -574,7 +724,7 @@ function Tasks({ selectedDay }) {
               ))}
             </Select>
             <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="floor">Floor</option>
+              <option value="floor">Mandatory</option>
               <option value="ceiling">Bonus</option>
             </Select>
           </div>

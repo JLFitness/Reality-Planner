@@ -34,7 +34,17 @@ export function makeDefaults() {
     updatedAt: 0,
     // bufferPct: protected daily margin. sleep*: drives the auto-seeded sleep blocks.
     // windDownMin: how long before bedtime the wind-down prompt kicks in.
-    settings: { bufferPct: 0.2, sleepHours: 8, sleepStart: '23:00', windDownMin: 30 },
+    // theme: app appearance — accent colour + neutral style/skin (see index.css).
+    settings: {
+      bufferPct: 0.2,
+      sleepHours: 8,
+      sleepStart: '23:00',
+      windDownMin: 30,
+      theme: { accent: 'emerald', skin: 'slate' },
+      // When true, fixed commitments repeat on every week. When false they're
+      // planned per-week (tagged with weekStart). Sleep always repeats regardless.
+      repeatCommitments: true,
+    },
     // Ranked categories — order IS the priority. Cuts come from the bottom up.
     priorities,
     // Daily non-negotiables. All done = 100% (the floor).
@@ -64,7 +74,18 @@ export function makeDefaults() {
       { id: uid(), label: 'Shorts', categoryId: catId('Content'), metric: 'count', target: 2, ceiling: 3 },
       { id: uid(), label: 'Gym sessions', categoryId: catId('Gym'), metric: 'sessions', target: 3, ceiling: null },
     ],
-    // Per-day logs: { [isoDate]: { golden: {id:bool}, tasks: {id:{done,qty}} } }
+    // Rewards you can earn by hitting 100% of your floor. Each new day, three are
+    // offered at random and you pick one to aim for. Edit the pool in Setup.
+    rewards: [
+      'Relaxing TV',
+      'Snack',
+      'Spend money on something cheap',
+      'Long hot shower',
+      'Coffee out',
+      'Hour of gaming',
+    ].map((label) => ({ id: uid(), label })),
+    // Per-day logs: { [isoDate]: { golden: {id:bool}, tasks: {id:{done,qty}},
+    //   reward: { options:[rewardId×3], chosen: rewardId|null, claimed: bool } } }
     log: {},
     // Per-week reflection notes: { [weekKey]: note }
     reviews: {},

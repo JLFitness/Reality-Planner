@@ -1,26 +1,28 @@
 // Weekly realism math: free time, the protected buffer, and what to cut when overloaded.
 // Days that have already passed this week are excluded from the headline totals and
 // can't be altered, so the rating reflects only the days still to come.
-import { DAYS, blockHours, dayIndex } from './time.js';
+import { DAYS, blockHours, todayISO, addDaysISO, weekKey } from './time.js';
+import { weekTasks, weekCommitments } from './week.js';
 
-// Per-day and whole-week breakdown of committed / free / buffer / available / planned hours.
-export function plannerStats(state) {
+// Per-day and whole-week breakdown of committed / free / buffer / available / planned
+// hours for the week starting `wk` (Monday ISO; defaults to the current week).
+export function plannerStats(state, wk = weekKey(new Date())) {
   const { commitments, tasks, settings } = state;
   const bufferPct = settings.bufferPct;
-  const todayIdx = dayIndex(new Date());
+  const repeat = settings.repeatCommitments;
+  const today = todayISO();
 
   const days = DAYS.map((name, di) => {
-    const committed = commitments
-      .filter((c) => c.day === di)
+    const committed = weekCommitments(commitments, di, wk, repeat)
       .reduce((s, c) => s + blockHours(c.start, c.end), 0);
     const free = Math.max(0, 24 - committed);
     const buffer = free * bufferPct; // protected safety net
     const available = Math.max(0, free - buffer); // schedulable time
-    const planned = tasks
-      .filter((t) => t.day === di)
+    const planned = weekTasks(tasks, di, wk)
       .reduce((s, t) => s + (Number(t.hours) || 0), 0);
     const leftover = available - planned; // negative = overflow
-    return { di, name, past: di < todayIdx, committed, free, buffer, available, planned, leftover };
+    const past = addDaysISO(wk, di) < today; // locked once that calendar day has passed
+    return { di, name, past, committed, free, buffer, available, planned, leftover };
   });
 
   const total = (list) =>
@@ -44,14 +46,14 @@ export function plannerStats(state) {
   if (remaining.planned > remaining.available) rating = 'Overloaded';
   else if (remaining.planned > remaining.available * 0.85) rating = 'Tight';
 
-  return { days, tot, remaining, rating, bufferPct, todayIdx };
+  return { days, tot, remaining, rating, bufferPct, wk };
 }
 
 // When the rest of the week is Overloaded, suggest what to drop — strictly from the
 // bottom of the priorities list upward, ceiling/bonus tasks only, and only on days
 // that haven't passed. Floor tasks and the golden list are never cut.
-export function cutSuggestions(state) {
-  const stats = plannerStats(state);
+export function cutSuggestions(state, wk = weekKey(new Date())) {
+  const stats = plannerStats(state, wk);
   if (stats.rating !== 'Overloaded') {
     return { cuts: [], freed: 0, remainingOverflow: 0, enough: true };
   }
@@ -61,8 +63,10 @@ export function cutSuggestions(state) {
     rankOf[p.id] = i; // higher index = lower priority = bottom of the list
   });
 
+  // Days of this week that haven't passed yet.
+  const futureDays = new Set(stats.days.filter((d) => !d.past).map((d) => d.di));
   const candidates = state.tasks
-    .filter((t) => t.kind === 'ceiling' && t.day >= stats.todayIdx)
+    .filter((t) => t.kind === 'ceiling' && t.weekStart === wk && futureDays.has(t.day))
     .sort(
       (a, b) =>
         (rankOf[b.categoryId] ?? -1) - (rankOf[a.categoryId] ?? -1) ||

@@ -10,45 +10,80 @@ import {
   prettyClock,
   toMinutes,
   hrs,
+  weekKey,
 } from '../lib/time.js';
 import { dayScore, isTaskDone } from '../lib/scoring.js';
+import { weekTasks, weekCommitments, isSleep } from '../lib/week.js';
 import { categoryColor } from '../lib/colors.js';
 import DayBoard from '../components/DayTimeline.jsx';
 import { Card, Panel, Btn, IconBtn, NumberInput, Label, Select, Pill, Empty, Modal } from '../components/ui.jsx';
+
+// Pick up to n distinct reward ids at random from the pool.
+function pickRewards(pool, n = 3) {
+  const ids = pool.map((r) => r.id);
+  for (let i = ids.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  return ids.slice(0, Math.min(n, ids.length));
+}
 
 export default function Today() {
   const { state, actions } = useStore();
   const [iso, setIso] = useState(todayISO());
   const di = dayIndex(fromISO(iso));
+  const wk = weekKey(fromISO(iso));
   const isToday = iso === todayISO();
 
   const dlog = state.log[iso] || { golden: {}, tasks: {} };
   const score = dayScore(state, iso);
 
-  const floorTasks = state.tasks.filter((t) => t.day === di && t.kind === 'floor');
-  const ceilTasks = state.tasks.filter((t) => t.day === di && t.kind === 'ceiling');
+  const dayTasks = weekTasks(state.tasks, di, wk);
+  const floorTasks = dayTasks.filter((t) => t.kind === 'floor');
+  const ceilTasks = dayTasks.filter((t) => t.kind === 'ceiling');
   const hasSchedule =
-    state.tasks.some((t) => t.day === di) ||
-    state.commitments.some((c) => c.day === di && !/sleep/i.test(c.label || ''));
+    dayTasks.length > 0 ||
+    weekCommitments(state.commitments, di, wk, state.settings.repeatCommitments).some((c) => !isSleep(c));
 
-  // Next-day rollover: when the app opens on a new day, surface yesterday's loose ends.
+  // Next-day rollover: when the app opens on a new day, surface yesterday's loose
+  // ends. Also offer today's reward and prompt the choice (after any rollover).
   const [rollover, setRollover] = useState(null);
+  const [rewardOpen, setRewardOpen] = useState(false);
   useEffect(() => {
     const today = todayISO();
     const last = state.lastOpened;
+    let hadRollover = false;
     if (last && last !== today) {
       const prev = addDaysISO(today, -1);
       const pdi = dayIndex(fromISO(prev));
       const plog = state.log[prev] || { tasks: {} };
-      const items = state.tasks.filter((t) => t.day === pdi && !isTaskDone(t, plog.tasks?.[t.id]));
-      if (items.length) setRollover({ date: prev, items });
+      const items = weekTasks(state.tasks, pdi, weekKey(fromISO(prev))).filter(
+        (t) => !isTaskDone(t, plog.tasks?.[t.id])
+      );
+      if (items.length) {
+        setRollover({ date: prev, items });
+        hadRollover = true;
+      }
     }
     if (last !== today) actions.markOpened(today);
+
+    // Reward: offer 3 random options for today (once), then prompt to choose.
+    const pool = state.rewards || [];
+    const tr = state.log[today]?.reward;
+    if (pool.length && !tr) actions.offerRewards(today, pickRewards(pool, 3));
+    if (pool.length && !(tr && tr.chosen) && !hadRollover) setRewardOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // When the rollover modal closes, fall through to the reward chooser if needed.
+  const closeRollover = () => {
+    setRollover(null);
+    const tr = state.log[todayISO()]?.reward;
+    if ((state.rewards || []).length && !(tr && tr.chosen)) setRewardOpen(true);
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 stagger">
       <header className="flex items-center justify-between">
         <IconBtn aria-label="Previous day" onClick={() => setIso(addDaysISO(iso, -1))}>
           ‹
@@ -67,6 +102,8 @@ export default function Today() {
       <WeightCard iso={iso} />
 
       <ScoreCard score={score} />
+
+      {isToday && <RewardCard iso={iso} floorMet={score.floorMet} />}
 
       {/* Golden list — the foundation, visually distinct */}
       <Card className="border border-amber-500/40 bg-amber-500/5 p-4">
@@ -101,17 +138,117 @@ export default function Today() {
         )}
       </Card>
 
-      <TaskGroup title="Floor tasks" subtitle="Must-do — counts toward 100%" tasks={floorTasks} iso={iso} />
+      <TaskGroup title="Mandatory tasks" subtitle="Must-do — counts toward 100%" tasks={floorTasks} iso={iso} />
       <TaskGroup title="Bonus tasks" subtitle="Nice-to-have — adds on top, up to 150%" tasks={ceilTasks} iso={iso} bonus />
 
       {hasSchedule && (
-        <Panel title={isToday ? "Today's schedule" : 'Schedule'} subtitle="What's on, in time order">
-          <DayBoard di={di} />
+        <Panel collapsible persistKey="today-schedule" title={isToday ? "Today's schedule" : 'Schedule'} subtitle="What's on, in time order">
+          <DayBoard di={di} weekStart={wk} />
         </Panel>
       )}
 
-      {rollover && <RolloverModal rollover={rollover} onClose={() => setRollover(null)} />}
+      {/* Overlays kept out of the stagger flow so they use their own animations. */}
+      <div>
+        {rollover && <RolloverModal rollover={rollover} onClose={closeRollover} />}
+        {rewardOpen && <RewardChooserModal onClose={() => setRewardOpen(false)} />}
+      </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------- reward */
+
+// The chooser that pops on a new day, plus the card that tracks lock/unlock.
+function RewardChooserModal({ onClose }) {
+  const { state, actions } = useStore();
+  const iso = todayISO();
+  const pool = state.rewards || [];
+  const byId = (id) => pool.find((r) => r.id === id);
+  const options = (state.log[iso]?.reward?.options || []).map(byId).filter(Boolean);
+  if (!options.length) return null;
+
+  return (
+    <Modal title="🎁 Choose today's reward" onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-400">
+        Pick one to aim for today. Hit{' '}
+        <span className="font-semibold text-slate-200">100%</span> and it's yours.
+      </p>
+      <div className="grid gap-2">
+        {options.map((r) => (
+          <button
+            key={r.id}
+            onClick={() => {
+              actions.chooseReward(iso, r.id);
+              onClose();
+            }}
+            className="rounded-xl border border-slate-700 bg-slate-950/50 p-3 text-left text-sm font-medium text-slate-100 transition hover:border-fuchsia-400 hover:bg-fuchsia-500/10"
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function RewardCard({ iso, floorMet }) {
+  const { state, actions } = useStore();
+  const pool = state.rewards || [];
+  if (!pool.length) return null;
+
+  const reward = state.log[iso]?.reward;
+  const byId = (id) => pool.find((r) => r.id === id);
+  const options = (reward?.options || []).map(byId).filter(Boolean);
+  const chosen = reward?.chosen ? byId(reward.chosen) : null;
+
+  // Not chosen yet → inline picker (in case the modal was dismissed).
+  if (!chosen) {
+    if (!options.length) return null;
+    return (
+      <Card className="border border-fuchsia-500/40 bg-fuchsia-500/5 p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="text-xl">🎁</span>
+          <h2 className="font-bold text-fuchsia-200">Choose today's reward</h2>
+        </div>
+        <p className="mb-3 text-xs text-slate-400">Pick one — it unlocks when you hit 100%.</p>
+        <div className="grid gap-2">
+          {options.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => actions.chooseReward(iso, r.id)}
+              className="rounded-xl border border-slate-700 bg-slate-950/40 p-3 text-left text-sm font-medium text-slate-100 transition hover:border-fuchsia-400 hover:bg-fuchsia-500/10"
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </Card>
+    );
+  }
+
+  // Chosen → locked until the floor is met, then claimable.
+  const claimed = !!reward?.claimed;
+  return (
+    <Card className={`p-4 ${floorMet ? 'border border-fuchsia-400/60 bg-fuchsia-500/10' : 'border border-slate-800'}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs text-slate-400">{floorMet ? 'Reward unlocked 🎉' : "Today's reward"}</div>
+          <div className="truncate text-lg font-bold text-fuchsia-200">🎁 {chosen.label}</div>
+        </div>
+        {claimed ? (
+          <Pill className="bg-fuchsia-500/20 text-fuchsia-200">Enjoyed ✓</Pill>
+        ) : floorMet ? (
+          <Btn variant="primary" onClick={() => actions.claimReward(iso)}>
+            Claim it
+          </Btn>
+        ) : (
+          <span className="text-2xl">🔒</span>
+        )}
+      </div>
+      {!floorMet && !claimed && (
+        <p className="mt-1 text-xs text-slate-500">Hit 100% to unlock this.</p>
+      )}
+    </Card>
   );
 }
 
@@ -231,11 +368,11 @@ function ScoreCard({ score }) {
       <div className={`text-5xl font-extrabold ${met ? 'text-emerald-400' : 'text-slate-200'}`}>{score.score}%</div>
       {met ? (
         <div className="mt-1 text-sm font-semibold text-emerald-300">
-          Floor hit ✓{score.score > 100 ? ` · +${score.score - 100}% bonus` : ''}
+          All mandatory done ✓{score.score > 100 ? ` · +${score.score - 100}% bonus` : ''}
         </div>
       ) : (
         <div className="mt-1 text-sm text-slate-400">
-          Floor: {score.floorDone}/{score.floorTotal} done
+          Mandatory: {score.floorDone}/{score.floorTotal} done
         </div>
       )}
       {score.ceilTotal > 0 && (

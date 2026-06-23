@@ -6,11 +6,13 @@
 // free time (after commitments) is split into a schedulable part and a protected
 // buffer band; floating tasks flow into the schedulable part and spill into the
 // buffer (flagged overloaded) only when there's too much.
-import { toMinutes } from './time.js';
+import { toMinutes, weekKey } from './time.js';
 import { categoryColor, FIXED_COLOR } from './colors.js';
+import { weekTasks, weekCommitments, isSleep } from './week.js';
 
 export const SNAP_MIN = 30; // drag granularity
 const SLEEP_RE = /sleep/i;
+const DEFAULT_WK = () => weekKey(new Date());
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function commitmentSpan(c) {
@@ -35,15 +37,16 @@ export function wakingWindow(state, di) {
 
 // Commitments + anchored tasks that occupy fixed time on a day. `excludeId` skips
 // the item being moved (a task id or a commitment id).
-export function occupiedRanges(state, di, excludeId) {
+export function occupiedRanges(state, di, excludeId, wk = DEFAULT_WK()) {
   const { W0, W1 } = wakingWindow(state, di);
+  const repeat = state.settings.repeatCommitments;
   const out = [];
-  for (const c of state.commitments.filter((c) => c.day === di && !SLEEP_RE.test(c.label || ''))) {
-    if (c.id === excludeId) continue;
+  for (const c of weekCommitments(state.commitments, di, wk, repeat)) {
+    if (c.id === excludeId || isSleep(c)) continue;
     const { start, end } = commitmentSpan(c);
     out.push({ start: clamp(start, W0, W1), end: clamp(end, W0, W1) });
   }
-  for (const t of state.tasks.filter((t) => t.day === di && t.start && t.id !== excludeId)) {
+  for (const t of weekTasks(state.tasks, di, wk).filter((t) => t.start && t.id !== excludeId)) {
     const s = toMinutes(t.start);
     out.push({ start: clamp(s, W0, W1), end: clamp(s + (Number(t.hours) || 0) * 60, W0, W1) });
   }
@@ -51,9 +54,9 @@ export function occupiedRanges(state, di, excludeId) {
 }
 
 // Snap to a free slot of `durMin` near `desiredStartMin`. Returns minutes or null.
-export function findDropStart(state, di, taskId, desiredStartMin, durMin) {
+export function findDropStart(state, di, taskId, desiredStartMin, durMin, wk = DEFAULT_WK()) {
   const { W0, W1 } = wakingWindow(state, di);
-  const occ = occupiedRanges(state, di, taskId);
+  const occ = occupiedRanges(state, di, taskId, wk);
   const maxStart = W1 - durMin;
   if (maxStart < W0) return null;
   const fits = (s) => s >= W0 && s + durMin <= W1 && !occ.some((r) => s < r.end - 0.01 && s + durMin > r.start + 0.01);
@@ -144,14 +147,15 @@ function flow(intervals, segs) {
   return pieces;
 }
 
-export function dayLayout(state, di) {
+export function dayLayout(state, di, wk = DEFAULT_WK()) {
   const { W0, W1 } = wakingWindow(state, di);
   const span = Math.max(1, W1 - W0);
   const bufferPct = state.settings.bufferPct;
+  const repeat = state.settings.repeatCommitments;
 
   // Anchored commitments (non-sleep) within the waking window.
-  const commitments = state.commitments
-    .filter((c) => c.day === di && !SLEEP_RE.test(c.label || ''))
+  const commitments = weekCommitments(state.commitments, di, wk, repeat)
+    .filter((c) => !isSleep(c))
     .map((c) => {
       const { start, end } = commitmentSpan(c);
       return { id: c.id, label: c.label, top: clamp(start, W0, W1), bottom: clamp(end, W0, W1) };
@@ -159,7 +163,7 @@ export function dayLayout(state, di) {
     .filter((c) => c.bottom - c.top > 0.5)
     .sort((a, b) => a.top - b.top);
 
-  const dayTasks = state.tasks.filter((t) => t.day === di);
+  const dayTasks = weekTasks(state.tasks, di, wk);
   const anchored = dayTasks
     .filter((t) => t.start)
     .map((t) => {
@@ -253,9 +257,9 @@ export function dayLayout(state, di) {
 }
 
 // Per-category planned minutes for a day, for the colour-coded overview bar.
-export function dayBreakdown(state, di) {
+export function dayBreakdown(state, di, wk = DEFAULT_WK()) {
   const byCat = new Map();
-  for (const t of state.tasks.filter((tk) => tk.day === di)) {
+  for (const t of weekTasks(state.tasks, di, wk)) {
     const min = (Number(t.hours) || 0) * 60;
     byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + min);
   }

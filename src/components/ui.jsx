@@ -138,11 +138,11 @@ export function Empty({ children }) {
 export function Modal({ title, onClose, children }) {
   return (
     <div
-      className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4"
+      className="anim-fade-in fixed inset-0 z-40 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
-        className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:rounded-2xl"
+        className="modal-panel max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {title && (

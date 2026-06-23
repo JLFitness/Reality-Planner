@@ -7,14 +7,100 @@
     <title>Reality Planner</title>
     <meta name="description" content="Plan realistic weeks. Protect your floor. Score against a sane floor, not a perfect ideal." />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Reality" />
+    <!-- Mobile-only splash: shows instantly on open, fades out once React mounts. -->
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: #020617;
+        transition: opacity 0.45s ease, visibility 0.45s ease;
+      }
+      #splash img {
+        width: 104px;
+        height: 104px;
+        animation: splashPop 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+      }
+      #splash .splash-name {
+        font: 600 18px/1 system-ui, -apple-system, Segoe UI, sans-serif;
+        letter-spacing: 0.02em;
+        color: #e2e8f0;
+        opacity: 0;
+        animation: splashFade 0.5s ease 0.25s both;
+      }
+      #splash .splash-bar {
+        width: 120px;
+        height: 3px;
+        border-radius: 9999px;
+        background: rgba(148, 163, 184, 0.2);
+        overflow: hidden;
+      }
+      #splash .splash-bar span {
+        display: block;
+        height: 100%;
+        width: 40%;
+        border-radius: inherit;
+        background: #34d399;
+        animation: splashSlide 1s ease-in-out infinite;
+      }
+      #splash.hide {
+        opacity: 0;
+        visibility: hidden;
+      }
+      /* Desktop never sees the splash. */
+      @media (min-width: 768px) {
+        #splash {
+          display: none !important;
+        }
+      }
+      @keyframes splashPop {
+        0% { opacity: 0; transform: scale(0.7); }
+        60% { transform: scale(1.05); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      @keyframes splashFade {
+        to { opacity: 0.9; }
+      }
+      @keyframes splashSlide {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(330%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #splash img,
+        #splash .splash-bar span,
+        #splash .splash-name {
+          animation: none;
+        }
+        #splash .splash-name { opacity: 0.9; }
+      }
+    </style>
   </head>
   <body>
+    <div id="splash" aria-hidden="true">
+      <img src="/icon-192.png" alt="" />
+      <div class="splash-name">Reality Planner</div>
+      <div class="splash-bar"><span></span></div>
+    </div>
     <div id="root"></div>
+    <!-- Apply the saved appearance before first paint to avoid a theme flash. -->
+    <script>
+      try {
+        var t = (JSON.parse(localStorage.getItem('reality-planner-state-v1')) || {}).settings || {};
+        var th = t.theme || {};
+        document.documentElement.dataset.skin = th.skin || 'slate';
+        document.documentElement.dataset.accent = th.accent || 'emerald';
+      } catch (e) {}
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

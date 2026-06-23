@@ -34,15 +34,13 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
-      <Card className="w-full max-w-sm p-6">
-        <div className="mb-5 flex items-center gap-2">
-          <span className="text-2xl">🛡️</span>
-          <div>
-            <h1 className="text-lg font-bold">Reality Planner</h1>
-            <p className="text-xs text-slate-400">
-              {mode === 'signin' ? 'Sign in to sync your week' : 'Create your account'}
-            </p>
-          </div>
+      <Card className="anim-scale-in w-full max-w-sm p-6">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <img src="/favicon.png" alt="" className="anim-pop mb-2 h-16 w-16" />
+          <h1 className="text-xl font-bold">Reality Planner</h1>
+          <p className="text-xs text-slate-400">
+            {mode === 'signin' ? 'Sign in to sync your week' : 'Create your account'}
+          </p>
         </div>
 
         <form className="space-y-3" onSubmit={submit}>

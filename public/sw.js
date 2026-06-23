@@ -1,7 +1,9 @@
 // Minimal runtime-caching service worker so the app works offline / installs as a PWA.
 // Strategy: network-first, fall back to cache. New successful responses are cached as
 // they're fetched, so we never need to know Vite's hashed asset names ahead of time.
-const CACHE = 'reality-planner-v1';
+// __BUILD_ID__ is replaced with a unique id at build time (see vite.config.js), so
+// every deploy uses a fresh cache and old caches are purged on activate.
+const CACHE = 'reality-planner-__BUILD_ID__';
 
 self.addEventListener('install', () => {
   self.skipWaiting();

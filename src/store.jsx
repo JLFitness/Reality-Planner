@@ -9,21 +9,35 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { makeDefaults, makeSleepBlocks, uid } from './lib/defaults.js';
 import { colorForIndex } from './lib/colors.js';
-import { addClock } from './lib/time.js';
+import { addClock, weekKey, addDaysISO } from './lib/time.js';
 import { supabase, supabaseEnabled, TABLE } from './lib/supabase.js';
 
 const KEY = 'reality-planner-state-v1';
 const StoreCtx = createContext(null);
 const SyncCtx = createContext(null);
 
-const hasSleep = (commitments) => commitments.some((c) => /sleep/i.test(c.label || ''));
+const SLEEP_RE = /sleep/i;
+const hasSleep = (commitments) => commitments.some((c) => SLEEP_RE.test(c.label || ''));
+export const thisWeekKey = () => weekKey(new Date());
 
 // Merge a raw saved/remote state object over the current defaults so newly added
 // fields always exist, and migrate older saves forward without losing data.
 function normalize(s) {
   const d = makeDefaults();
   const settings = { ...d.settings, ...(s.settings || {}) };
+  // Theme is nested, so fill in any missing keys rather than replacing wholesale.
+  settings.theme = { ...d.settings.theme, ...(s.settings?.theme || {}) };
   const savedCommitments = s.commitments || [];
+  // Per-week planning migration: tag legacy tasks / non-sleep commitments that have
+  // no weekStart with the current week (sleep stays recurring, weekStart untouched).
+  const wk = weekKey(new Date());
+  const migratedCommitments = (
+    (s.version || 1) < 2 && !hasSleep(savedCommitments)
+      ? [...makeSleepBlocks(settings.sleepStart, settings.sleepHours), ...savedCommitments]
+      : savedCommitments
+  ).map((c) =>
+    SLEEP_RE.test(c.label || '') || c.weekStart ? c : { ...c, weekStart: wk }
+  );
   return {
     ...d,
     ...s,
@@ -35,16 +49,14 @@ function normalize(s) {
       color: p.color || colorForIndex(i),
     })),
     golden: s.golden || d.golden,
-    commitments:
-      (s.version || 1) < 2 && !hasSleep(savedCommitments)
-        ? [...makeSleepBlocks(settings.sleepStart, settings.sleepHours), ...savedCommitments]
-        : savedCommitments,
-    tasks: s.tasks || [],
+    commitments: migratedCommitments,
+    tasks: (s.tasks || []).map((t) => (t.weekStart ? t : { ...t, weekStart: wk })),
     templates: Array.isArray(s.templates) ? s.templates : d.templates,
     commitmentTemplates: Array.isArray(s.commitmentTemplates)
       ? s.commitmentTemplates
       : d.commitmentTemplates,
     targets: Array.isArray(s.targets) ? s.targets : d.targets,
+    rewards: Array.isArray(s.rewards) ? s.rewards : d.rewards,
     log: s.log || {},
     reviews: s.reviews || {},
     lastOpened: s.lastOpened ?? null,
@@ -84,6 +96,18 @@ export function StoreProvider({ children }) {
 
   // Every local change bumps updatedAt; the cloud uses it for last-write-wins.
   const mutate = (updater) => setState((s) => ({ ...updater(s), updatedAt: Date.now() }));
+
+  // Reflect the chosen appearance onto <html> so the CSS variables (and thus
+  // every slate/emerald class) restyle the whole app — and the mobile browser
+  // chrome colour follows the skin too.
+  const theme = state.settings.theme || {};
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.skin = theme.skin || 'slate';
+    root.dataset.accent = theme.accent || 'emerald';
+    const surface = { slate: '#020617', carbon: '#09090b', stone: '#0c0a09' }[theme.skin] || '#020617';
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', surface);
+  }, [theme.skin, theme.accent]);
 
   // Always cache locally; push to the cloud after the initial pull (debounced).
   useEffect(() => {
@@ -152,7 +176,10 @@ export function StoreProvider({ children }) {
       if (error) throw error;
       const remote = data?.data;
       const local = stateRef.current;
-      if (remote && Number(remote.updatedAt || 0) > Number(local.updatedAt || 0)) {
+      // Adopt remote if it's newer — or if local is a pristine seed (updatedAt 0),
+      // so a fresh device never overwrites real cloud data with default data.
+      const localTs = Number(local.updatedAt || 0);
+      if (remote && (localTs === 0 || Number(remote.updatedAt || 0) > localTs)) {
         suppressPush.current = true;
         setState(normalize(remote));
         readyRef.current = true;
@@ -220,7 +247,7 @@ export function StoreProvider({ children }) {
 
     // --- Commitments ---
     addCommitment: (c) =>
-      mutate((s) => ({ ...s, commitments: [...s.commitments, { id: uid(), ...c }] })),
+      mutate((s) => ({ ...s, commitments: [...s.commitments, { id: uid(), weekStart: thisWeekKey(), ...c }] })),
     updateCommitment: (id, patch) =>
       mutate((s) => ({
         ...s,
@@ -230,14 +257,33 @@ export function StoreProvider({ children }) {
       mutate((s) => ({ ...s, commitments: s.commitments.filter((c) => c.id !== id) })),
 
     // --- Tasks ---
-    addTask: (t) => mutate((s) => ({ ...s, tasks: [...s.tasks, { id: uid(), ...t }] })),
+    addTask: (t) => mutate((s) => ({ ...s, tasks: [...s.tasks, { id: uid(), weekStart: thisWeekKey(), ...t }] })),
     updateTask: (id, patch) =>
       mutate((s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
     removeTask: (id) => mutate((s) => ({ ...s, tasks: s.tasks.filter((t) => t.id !== id) })),
+    // Clone a week's tasks (and per-week commitments) forward to the next week.
+    copyWeekToNext: (wk) =>
+      mutate((s) => {
+        const next = addDaysISO(wk, 7);
+        const tasks = s.tasks
+          .filter((t) => t.weekStart === wk)
+          .map((t) => ({ ...t, id: uid(), weekStart: next }));
+        let commitments = [];
+        if (!s.settings.repeatCommitments) {
+          commitments = s.commitments
+            .filter((c) => c.weekStart === wk && !SLEEP_RE.test(c.label || ''))
+            .map((c) => ({ ...c, id: uid(), weekStart: next }));
+        }
+        return { ...s, tasks: [...s.tasks, ...tasks], commitments: [...s.commitments, ...commitments] };
+      }),
 
     // --- Settings ---
     setBufferPct: (pct) => mutate((s) => ({ ...s, settings: { ...s.settings, bufferPct: pct } })),
     setWindDown: (min) => mutate((s) => ({ ...s, settings: { ...s.settings, windDownMin: min } })),
+    setRepeatCommitments: (on) =>
+      mutate((s) => ({ ...s, settings: { ...s.settings, repeatCommitments: !!on } })),
+    setTheme: (patch) =>
+      mutate((s) => ({ ...s, settings: { ...s.settings, theme: { ...s.settings.theme, ...patch } } })),
     applySleepToAllDays: (hours, start) =>
       mutate((s) => ({
         ...s,
@@ -270,7 +316,7 @@ export function StoreProvider({ children }) {
         ...s,
         commitmentTemplates: s.commitmentTemplates.filter((t) => t.id !== id),
       })),
-    addCommitmentFromTemplate: (templateId, day, startOverride = null) =>
+    addCommitmentFromTemplate: (templateId, day, startOverride = null, weekStart = thisWeekKey()) =>
       mutate((s) => {
         const t = s.commitmentTemplates.find((x) => x.id === templateId);
         if (!t) return s;
@@ -278,7 +324,7 @@ export function StoreProvider({ children }) {
         const end = addClock(start, Number(t.hours) || 1);
         return {
           ...s,
-          commitments: [...s.commitments, { id: uid(), label: t.name || 'Commitment', day, start, end }],
+          commitments: [...s.commitments, { id: uid(), label: t.name || 'Commitment', day, start, end, weekStart }],
         };
       }),
 
@@ -308,7 +354,7 @@ export function StoreProvider({ children }) {
       })),
     removeTemplate: (id) =>
       mutate((s) => ({ ...s, templates: s.templates.filter((t) => t.id !== id) })),
-    addTaskFromTemplate: (templateId, day, start = null) =>
+    addTaskFromTemplate: (templateId, day, start = null, weekStart = thisWeekKey()) =>
       mutate((s) => {
         const t = s.templates.find((x) => x.id === templateId);
         if (!t) return s;
@@ -323,6 +369,7 @@ export function StoreProvider({ children }) {
           notes: t.notes || '',
           start: start || null,
           day,
+          weekStart,
         };
         return { ...s, tasks: [...s.tasks, task] };
       }),
@@ -375,6 +422,32 @@ export function StoreProvider({ children }) {
       mutate((s) => {
         const dl = s.log[iso] || { golden: {}, tasks: {} };
         return { ...s, log: { ...s.log, [iso]: { ...dl, weight } } };
+      }),
+
+    // --- Rewards (pool managed in Setup) ---
+    addReward: (label) => mutate((s) => ({ ...s, rewards: [...s.rewards, { id: uid(), label }] })),
+    updateReward: (id, label) =>
+      mutate((s) => ({ ...s, rewards: s.rewards.map((r) => (r.id === id ? { ...r, label } : r)) })),
+    removeReward: (id) => mutate((s) => ({ ...s, rewards: s.rewards.filter((r) => r.id !== id) })),
+
+    // --- Daily reward (offered / chosen / claimed; lives in the day log) ---
+    offerRewards: (iso, options) =>
+      mutate((s) => {
+        const dl = s.log[iso] || { golden: {}, tasks: {} };
+        if (dl.reward) return s; // already offered today — keep it stable
+        return { ...s, log: { ...s.log, [iso]: { ...dl, reward: { options, chosen: null, claimed: false } } } };
+      }),
+    chooseReward: (iso, rewardId) =>
+      mutate((s) => {
+        const dl = s.log[iso] || { golden: {}, tasks: {} };
+        const reward = { options: [], claimed: false, ...(dl.reward || {}), chosen: rewardId };
+        return { ...s, log: { ...s.log, [iso]: { ...dl, reward } } };
+      }),
+    claimReward: (iso) =>
+      mutate((s) => {
+        const dl = s.log[iso] || { golden: {}, tasks: {} };
+        if (!dl.reward) return s;
+        return { ...s, log: { ...s.log, [iso]: { ...dl, reward: { ...dl.reward, claimed: true } } } };
       }),
 
     // --- Review notes ---

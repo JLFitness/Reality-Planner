@@ -15,7 +15,7 @@ import {
 
 export default function Setup() {
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 stagger">
       <header>
         <h1 className="text-2xl font-bold">Setup</h1>
         <p className="text-sm text-slate-400">Set this once. It rarely changes.</p>
@@ -23,12 +23,16 @@ export default function Setup() {
 
       <Account />
 
+      <Panel collapsible persistKey="setup-appearance" title="Appearance" subtitle="Pick a colour and a style — changes the whole app instantly">
+        <Appearance />
+      </Panel>
+
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="space-y-4">
           <Panel collapsible defaultOpen={false} persistKey="setup-priorities" title="Priorities" subtitle="Ranked — cuts come from the bottom up. Each has a colour.">
             <Priorities />
           </Panel>
-          <Panel collapsible defaultOpen={false} persistKey="setup-golden" title="Golden list" subtitle="Daily non-negotiables — the floor">
+          <Panel collapsible defaultOpen={false} persistKey="setup-golden" title="Golden list" subtitle="Daily non-negotiables — always required">
             <Golden />
           </Panel>
           <Panel collapsible defaultOpen={false} persistKey="setup-buffer" title="Safety net" subtitle="Protected margin reserved each day">
@@ -36,6 +40,9 @@ export default function Setup() {
           </Panel>
           <Panel collapsible defaultOpen={false} persistKey="setup-sleep" title="Sleep" subtitle="Auto-blocked on every day so free time is realistic">
             <SleepSchedule />
+          </Panel>
+          <Panel collapsible defaultOpen={false} persistKey="setup-planning" title="Planning" subtitle="How weeks behave when you plan ahead">
+            <Planning />
           </Panel>
         </div>
 
@@ -48,6 +55,9 @@ export default function Setup() {
           </Panel>
           <Panel collapsible defaultOpen={false} persistKey="setup-targets" title="Weekly targets" subtitle="Tracked automatically in the Review page">
             <Targets />
+          </Panel>
+          <Panel collapsible defaultOpen={false} persistKey="setup-rewards" title="Rewards" subtitle="Earn one by hitting 100% — 3 are offered at random each day">
+            <Rewards />
           </Panel>
         </div>
       </div>
@@ -72,6 +82,90 @@ function Account() {
         Your week syncs to the cloud so it's the same on every device. Status: {status}.
       </p>
     </Panel>
+  );
+}
+
+/* ---------------------------------------------------------------- appearance */
+
+// Representative swatch colours / radii for the previews (the live values come
+// from the CSS variables in index.css once selected).
+const ACCENTS = [
+  { id: 'emerald', name: 'Emerald', color: '#10b981' },
+  { id: 'indigo', name: 'Indigo', color: '#6366f1' },
+  { id: 'violet', name: 'Violet', color: '#8b5cf6' },
+];
+
+const SKINS = [
+  { id: 'slate', name: 'Slate', desc: 'Cool & rounded', surface: '#0f172a', border: '#334155', radius: '0.9rem' },
+  { id: 'carbon', name: 'Carbon', desc: 'Mono & sharp', surface: '#18181b', border: '#3f3f46', radius: '0.4rem' },
+  { id: 'stone', name: 'Stone', desc: 'Warm & soft', surface: '#1c1917', border: '#44403c', radius: '1.3rem' },
+];
+
+function Appearance() {
+  const { state, actions } = useStore();
+  const theme = state.settings.theme || { accent: 'emerald', skin: 'slate' };
+  const accentColor = ACCENTS.find((a) => a.id === theme.accent)?.color || '#10b981';
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <Label>Colour</Label>
+        <div className="flex gap-3">
+          {ACCENTS.map((a) => {
+            const selected = theme.accent === a.id;
+            return (
+              <button
+                key={a.id}
+                onClick={() => actions.setTheme({ accent: a.id })}
+                aria-label={a.name}
+                className={`flex flex-1 flex-col items-center gap-2 rounded-xl border p-3 transition ${
+                  selected ? 'border-slate-500 bg-slate-800/50' : 'border-slate-800 hover:bg-slate-800/30'
+                }`}
+              >
+                <span
+                  className="h-8 w-8 rounded-full ring-2 ring-offset-2 ring-offset-slate-900"
+                  style={{ backgroundColor: a.color, '--tw-ring-color': selected ? a.color : 'transparent' }}
+                />
+                <span className={`text-xs font-medium ${selected ? 'text-slate-100' : 'text-slate-400'}`}>
+                  {a.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <Label>Style</Label>
+        <div className="grid grid-cols-3 gap-3">
+          {SKINS.map((sk) => {
+            const selected = theme.skin === sk.id;
+            return (
+              <button
+                key={sk.id}
+                onClick={() => actions.setTheme({ skin: sk.id })}
+                className={`rounded-xl border p-2 text-left transition ${
+                  selected ? 'border-slate-500 bg-slate-800/50' : 'border-slate-800 hover:bg-slate-800/30'
+                }`}
+              >
+                {/* mini preview rendered in this skin's own surface + radius */}
+                <span
+                  className="mb-2 flex h-12 w-full items-center gap-1.5 px-2"
+                  style={{ background: sk.surface, border: `1px solid ${sk.border}`, borderRadius: sk.radius }}
+                >
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: accentColor }} />
+                  <span className="h-1.5 flex-1 rounded-full" style={{ background: sk.border }} />
+                </span>
+                <span className={`block text-xs font-medium ${selected ? 'text-slate-100' : 'text-slate-300'}`}>
+                  {sk.name}
+                </span>
+                <span className="block text-[11px] text-slate-500">{sk.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -244,7 +338,7 @@ function SleepSchedule() {
 /* ----------------------------------------------------------------- templates */
 
 const KINDS = [
-  { id: 'floor', label: 'Floor (must-do)' },
+  { id: 'floor', label: 'Mandatory (must-do)' },
   { id: 'ceiling', label: 'Ceiling (bonus)' },
 ];
 
@@ -490,6 +584,82 @@ function Targets() {
       <Btn variant="primary" className="w-full" onClick={() => actions.addTarget({})}>
         Add target
       </Btn>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ planning */
+
+function Planning() {
+  const { state, actions } = useStore();
+  const on = state.settings.repeatCommitments;
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-3">
+      <span>
+        <span className="block text-sm font-medium text-slate-200">Repeat fixed commitments every week</span>
+        <span className="mt-0.5 block text-xs text-slate-500">
+          On: your routine (work, meals, training) shows on every week automatically. Off: plan
+          commitments separately per week. Sleep always repeats either way.
+        </span>
+      </span>
+      <input
+        type="checkbox"
+        className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-600 bg-slate-900 accent-emerald-500"
+        checked={on}
+        onChange={(e) => actions.setRepeatCommitments(e.target.checked)}
+      />
+    </label>
+  );
+}
+
+/* ------------------------------------------------------------------- rewards */
+
+function Rewards() {
+  const { state, actions } = useStore();
+  const [label, setLabel] = useState('');
+  const rewards = state.rewards || [];
+
+  const add = () => {
+    if (label.trim()) {
+      actions.addReward(label.trim());
+      setLabel('');
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        These are the treats you can earn. Each new day the app offers 3 at random — pick one, and
+        it unlocks when you hit 100%.
+      </p>
+
+      {rewards.length === 0 && <Empty>No rewards yet — add a few you'd actually enjoy.</Empty>}
+
+      <ul className="space-y-2">
+        {rewards.map((r) => (
+          <li key={r.id} className="flex items-center gap-2">
+            <span>🎁</span>
+            <TextInput value={r.label} onChange={(e) => actions.updateReward(r.id, e.target.value)} />
+            <IconBtn aria-label="Delete" onClick={() => actions.removeReward(r.id)}>
+              ✕
+            </IconBtn>
+          </li>
+        ))}
+      </ul>
+
+      <div className="flex gap-2">
+        <TextInput
+          placeholder="New reward (e.g. 30 min gaming)"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+        />
+        <Btn onClick={add}>Add</Btn>
+      </div>
+
+      {rewards.length > 0 && rewards.length < 3 && (
+        <p className="text-xs text-slate-500">Add at least 3 for a full choice each day (fewer still works).</p>
+      )}
     </div>
   );
 }

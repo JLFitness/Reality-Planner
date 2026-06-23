@@ -102,6 +102,39 @@ export function prettyDate(iso) {
   return `${DAY_LONG[dayIndex(d)]} ${d.getDate()}/${d.getMonth() + 1}`;
 }
 
+export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+export function startOfMonth(iso) {
+  const d = fromISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth(), 1));
+}
+export function endOfMonth(iso) {
+  const d = fromISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+}
+// Shift by whole months, clamped to a safe day so month-length differences don't skip.
+export function addMonthsISO(iso, n) {
+  const d = fromISO(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth() + n, 1));
+}
+export function startOfYear(iso) {
+  return toISO(new Date(fromISO(iso).getFullYear(), 0, 1));
+}
+export function endOfYear(iso) {
+  return toISO(new Date(fromISO(iso).getFullYear(), 11, 31));
+}
+export function monthLabel(iso) {
+  const d = fromISO(iso);
+  return `${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+}
+export function yearOf(iso) {
+  return fromISO(iso).getFullYear();
+}
+
 // Round to 1 decimal and drop trailing ".0" for clean display.
 export function hrs(n) {
   const r = Math.round(n * 10) / 10;

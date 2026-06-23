@@ -1,113 +1,220 @@
 import { useState } from 'react';
 import { useStore } from '../store.jsx';
-import { DAYS, fromISO, todayISO, addDaysISO, weekKey, mondayOf, weekDates } from '../lib/time.js';
-import { weekSummary, floorStreak, targetActuals } from '../lib/scoring.js';
+import {
+  DAYS,
+  MONTHS,
+  fromISO,
+  toISO,
+  todayISO,
+  addDaysISO,
+  addMonthsISO,
+  weekKey,
+  weekDates,
+  startOfMonth,
+  endOfMonth,
+  startOfYear,
+  endOfYear,
+  monthLabel,
+  yearOf,
+} from '../lib/time.js';
+import { dayScore, floorStreak, rangeStats, weightAvgRange, targetActualsRange } from '../lib/scoring.js';
 import { Card, Empty } from '../components/ui.jsx';
 import BarChart, { LineChart } from '../components/Chart.jsx';
 
+const RANGES = [
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+  { id: 'year', label: 'Year' },
+];
+
+// Build everything the page shows for the chosen range + anchor: the bucketed
+// series (days / weeks / months), the period label, and the from–to window.
+function reviewView(state, range, anchor) {
+  if (range === 'week') {
+    const from = weekKey(fromISO(anchor));
+    const to = addDaysISO(from, 6);
+    const buckets = weekDates(fromISO(from)).map((iso, i) => {
+      const s = dayScore(state, iso);
+      return {
+        label: DAYS[i],
+        score: s.hasItems ? s.score : 0,
+        muted: !s.hasItems,
+        rate: s.floorMet ? 100 : 0,
+        weight: state.log[iso]?.weight ?? null,
+      };
+    });
+    const isCurrent = from === weekKey(new Date());
+    const mon = fromISO(from);
+    const sun = fromISO(to);
+    const label = isCurrent
+      ? 'This week'
+      : `${mon.getDate()}/${mon.getMonth() + 1} – ${sun.getDate()}/${sun.getMonth() + 1}`;
+    return { from, to, buckets, label, weeks: 1, unit: 'Week' };
+  }
+
+  if (range === 'month') {
+    const from = startOfMonth(anchor);
+    const to = endOfMonth(anchor);
+    const buckets = [];
+    let wkMon = weekKey(fromISO(from));
+    while (wkMon <= to) {
+      const wEnd = addDaysISO(wkMon, 6);
+      const rs = rangeStats(state, wkMon, wEnd);
+      const d = fromISO(wkMon);
+      buckets.push({
+        label: `${d.getDate()}/${d.getMonth() + 1}`,
+        score: rs.avg,
+        muted: rs.activeDays === 0,
+        rate: rs.mandatoryRate,
+        weight: weightAvgRange(state, wkMon, wEnd),
+      });
+      wkMon = addDaysISO(wkMon, 7);
+    }
+    const isCurrent = startOfMonth(anchor) === startOfMonth(todayISO());
+    return { from, to, buckets, label: `${isCurrent ? 'This month · ' : ''}${monthLabel(anchor)}`, weeks: buckets.length, unit: 'Month' };
+  }
+
+  // year — 12 monthly buckets, no navigation between years
+  const from = startOfYear(anchor);
+  const to = endOfYear(anchor);
+  const y = yearOf(anchor);
+  const buckets = MONTHS.map((m, mi) => {
+    const mFrom = toISO(new Date(y, mi, 1));
+    const mTo = toISO(new Date(y, mi + 1, 0));
+    const rs = rangeStats(state, mFrom, mTo);
+    return {
+      label: m,
+      score: rs.avg,
+      muted: rs.activeDays === 0,
+      rate: rs.mandatoryRate,
+      weight: weightAvgRange(state, mFrom, mTo),
+    };
+  });
+  const isCurrent = y === new Date().getFullYear();
+  return { from, to, buckets, label: `${isCurrent ? 'This year · ' : ''}${y}`, weeks: 52, unit: 'Year' };
+}
+
 export default function Review() {
   const { state, actions } = useStore();
+  const [range, setRange] = useState('week');
   const [anchor, setAnchor] = useState(todayISO());
 
-  const summary = weekSummary(state, anchor);
+  const view = reviewView(state, range, anchor);
+  const summary = rangeStats(state, view.from, view.to);
   const streak = floorStreak(state);
-  const actuals = targetActuals(state, anchor);
+  const periodWeight = weightAvgRange(state, view.from, view.to);
+  const actuals = targetActualsRange(state, view.from, view.to);
+
   const wk = weekKey(fromISO(anchor));
   const note = state.reviews[wk] || '';
 
-  const mon = mondayOf(fromISO(anchor));
-  const sun = addDaysISO(weekKey(fromISO(anchor)), 6);
-  const label = `${mon.getDate()}/${mon.getMonth() + 1} – ${fromISO(sun).getDate()}/${
-    fromISO(sun).getMonth() + 1
-  }`;
-  const isThisWeek = weekKey(fromISO(anchor)) === weekKey(new Date());
+  const step = (dir) => {
+    if (range === 'week') setAnchor(addDaysISO(anchor, dir * 7));
+    else if (range === 'month') setAnchor(addMonthsISO(anchor, dir));
+  };
+  const changeRange = (r) => {
+    setRange(r);
+    setAnchor(todayISO());
+  };
 
-  // Trend: last 8 weeks ending at the viewed week.
-  const trend = [];
-  for (let i = 7; i >= 0; i -= 1) {
-    const a = addDaysISO(anchor, -7 * i);
-    const s = weekSummary(state, a);
-    const m = mondayOf(fromISO(a));
-    trend.push({ label: `${m.getDate()}/${m.getMonth() + 1}`, summary: s, weight: weekWeightAvg(state, a) });
-  }
-
-  // Weight: each day this week + the week's average.
-  const dayWeights = summary.dates.map((iso) => state.log[iso]?.weight);
-  const presentWeights = dayWeights.filter((w) => typeof w === 'number');
-  const weightAvg = presentWeights.length
-    ? Math.round((presentWeights.reduce((a, b) => a + b, 0) / presentWeights.length) * 10) / 10
-    : null;
+  const weightSeries = view.buckets.map((b) => ({ label: b.label, value: b.weight }));
+  const enoughWeight = weightSeries.filter((w) => w.value != null).length >= 2;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 stagger">
+      {/* range selector */}
+      <div className="flex rounded-xl border border-slate-800 bg-slate-900/60 p-1">
+        {RANGES.map((r) => (
+          <button
+            key={r.id}
+            onClick={() => changeRange(r.id)}
+            className={`flex-1 rounded-lg py-2 text-sm font-medium transition ${
+              range === r.id ? 'bg-slate-800 text-emerald-400' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {/* period nav (no arrows for year) */}
       <header className="flex items-center justify-between">
-        <button
-          onClick={() => setAnchor(addDaysISO(anchor, -7))}
-          className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-800 text-slate-300"
-        >
-          ‹
-        </button>
-        <div className="text-center">
-          <div className="text-lg font-bold">{isThisWeek ? 'This week' : 'Week of'}</div>
-          <div className="text-xs text-slate-400">{label}</div>
-        </div>
-        <button
-          onClick={() => setAnchor(addDaysISO(anchor, 7))}
-          className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-800 text-slate-300"
-        >
-          ›
-        </button>
+        {range === 'year' ? (
+          <span className="h-11 w-11" />
+        ) : (
+          <button
+            onClick={() => step(-1)}
+            className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-800 text-slate-300"
+          >
+            ‹
+          </button>
+        )}
+        <div className="text-center text-lg font-bold">{view.label}</div>
+        {range === 'year' ? (
+          <span className="h-11 w-11" />
+        ) : (
+          <button
+            onClick={() => step(1)}
+            className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-800 text-slate-300"
+          >
+            ›
+          </button>
+        )}
       </header>
 
-      {/* streak + week avg */}
+      {/* streak + period average */}
       <div className="grid grid-cols-2 gap-3">
         <Card className="p-4 text-center">
           <div className="text-3xl font-extrabold text-amber-400">{streak}🔥</div>
-          <div className="text-xs text-slate-400">Floor-hit streak</div>
+          <div className="text-xs text-slate-400">Mandatory streak</div>
         </Card>
         <Card className="p-4 text-center">
           <div className="text-3xl font-extrabold text-emerald-400">{summary.avg}%</div>
           <div className="text-xs text-slate-400">
-            Week average {summary.activeDays > 0 ? `(${summary.activeDays}d)` : ''}
+            {view.unit} average {summary.activeDays > 0 ? `(${summary.activeDays}d)` : ''}
           </div>
         </Card>
       </div>
 
-      {/* per-day scores */}
+      {/* score */}
       <Card className="p-4">
-        <h2 className="mb-3 font-semibold">Daily scores</h2>
-        <div className="space-y-2">
-          {summary.scored.map((s, i) => (
-            <div key={s.iso} className="flex items-center gap-2 text-sm">
-              <span className="w-9 shrink-0 text-slate-400">{DAYS[i]}</span>
-              <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className={`h-full ${
-                    !s.hasItems ? 'bg-slate-700' : s.floorMet ? 'bg-emerald-500' : 'bg-rose-500/70'
-                  }`}
-                  style={{ width: `${Math.min(100, (s.score / 150) * 100)}%` }}
-                />
-              </div>
-              <span className="w-16 shrink-0 text-right">
-                {s.hasItems ? (
-                  <>
-                    <span className={s.floorMet ? 'text-emerald-400' : 'text-slate-300'}>{s.score}%</span>
-                    {s.floorMet && <span className="ml-1 text-emerald-400">✓</span>}
-                  </>
-                ) : (
-                  <span className="text-slate-600">—</span>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
+        <h2 className="mb-1 font-semibold">Score</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          {range === 'week' ? 'Daily score' : range === 'month' ? 'Weekly average' : 'Monthly average'}
+        </p>
+        {summary.activeDays === 0 ? (
+          <Empty>Nothing scored in this {range}.</Empty>
+        ) : (
+          <BarChart data={view.buckets.map((b) => ({ label: b.label, value: b.score, muted: b.muted }))} max={150} unit="%" />
+        )}
       </Card>
 
-      {/* targets vs actuals */}
+      {/* mandatory consistency */}
       <Card className="p-4">
-        <h2 className="mb-3 font-semibold">Targets vs done</h2>
+        <h2 className="mb-1 font-semibold">Mandatory consistency</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          {range === 'week' ? 'Days you hit 100%' : 'Share of active days at 100%'}
+        </p>
+        {summary.activeDays === 0 ? (
+          <Empty>Nothing scored in this {range}.</Empty>
+        ) : (
+          <BarChart
+            data={view.buckets.map((b) => ({ label: b.label, value: b.rate, muted: b.muted }))}
+            max={100}
+            unit="%"
+            accent="#fbbf24"
+          />
+        )}
+      </Card>
+
+      {/* targets vs done (scaled to the period's number of weeks) */}
+      <Card className="p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-semibold">Targets vs done</h2>
+          {view.weeks > 1 && <span className="text-xs text-slate-500">× {view.weeks} weeks</span>}
+        </div>
         {actuals.length === 0 ? (
-          <Empty>Add weekly targets in the Planner.</Empty>
+          <Empty>Add weekly targets in Setup.</Empty>
         ) : (
           <div className="space-y-3">
             {actuals.map((t) => (
@@ -115,8 +222,8 @@ export default function Review() {
                 key={t.id}
                 label={t.label || 'Untitled'}
                 done={t.done}
-                target={t.target}
-                ceiling={t.ceiling}
+                target={(t.target || 0) * view.weeks}
+                ceiling={t.ceiling ? t.ceiling * view.weeks : null}
                 unit={t.metric === 'hours' ? 'h' : ''}
                 hint={`${t.categoryName} · ${t.metric}`}
               />
@@ -125,74 +232,34 @@ export default function Review() {
         )}
       </Card>
 
-      {/* trends */}
-      <Card className="p-4">
-        <h2 className="mb-1 font-semibold">Trends</h2>
-        <p className="mb-2 text-xs text-slate-500">Weekly average score (last 8 weeks)</p>
-        <BarChart
-          data={trend.map((t) => ({
-            label: t.label,
-            value: t.summary.avg,
-            muted: t.summary.activeDays === 0,
-          }))}
-          max={150}
-          unit="%"
-          accent="#34d399"
-        />
-        <p className="mb-2 mt-3 text-xs text-slate-500">Floor-hit consistency</p>
-        <BarChart
-          data={trend.map((t) => ({
-            label: t.label,
-            value: t.summary.floorRate,
-            muted: t.summary.activeDays === 0,
-          }))}
-          max={100}
-          unit="%"
-          accent="#fbbf24"
-        />
-      </Card>
-
       {/* weight */}
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">Weight</h2>
-          {weightAvg != null && <span className="text-sm text-slate-400">avg {weightAvg}</span>}
+          {periodWeight != null && <span className="text-sm text-slate-400">avg {periodWeight}</span>}
         </div>
-        <div className="space-y-2">
-          {summary.dates.map((iso, i) => {
-            const w = dayWeights[i];
-            return (
-              <div key={iso} className="flex items-center gap-2 text-sm">
-                <span className="w-9 shrink-0 text-slate-400">{DAYS[i]}</span>
-                <div className="h-px flex-1 bg-slate-800/60" />
-                <span className={typeof w === 'number' ? 'font-medium text-slate-200' : 'text-slate-600'}>
-                  {typeof w === 'number' ? w : '—'}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <p className="mb-1 mt-4 text-xs text-slate-500">Weekly average (last 8 weeks)</p>
-        {trend.filter((t) => t.weight != null).length >= 2 ? (
-          <LineChart data={trend.map((t) => ({ label: t.label, value: t.weight }))} />
+        {enoughWeight ? (
+          <LineChart data={weightSeries} />
         ) : (
           <p className="py-3 text-center text-sm text-slate-500">
-            Keep logging your weight — the trend appears once you have two or more weeks.
+            Keep logging your weight — the trend appears once you have two or more points.
           </p>
         )}
       </Card>
 
-      {/* reflection */}
-      <Card className="p-4">
-        <h2 className="mb-2 font-semibold">Reflection</h2>
-        <textarea
-          value={note}
-          onChange={(e) => actions.setReviewNote(wk, e.target.value)}
-          placeholder="What worked, what slipped, what to change next week…"
-          rows={4}
-          className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-        />
-      </Card>
+      {/* reflection (weekly journal) */}
+      {range === 'week' && (
+        <Card className="p-4">
+          <h2 className="mb-2 font-semibold">Reflection</h2>
+          <textarea
+            value={note}
+            onChange={(e) => actions.setReviewNote(wk, e.target.value)}
+            placeholder="What worked, what slipped, what to change next week…"
+            rows={4}
+            className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+          />
+        </Card>
+      )}
 
       {state.tasks.length === 0 && <Empty>Plan a week to start tracking progress.</Empty>}
     </div>
@@ -212,27 +279,19 @@ function TargetRow({ label, done, target, ceiling, unit = '', hint }) {
         </span>
         <span className={hitFloor ? 'font-semibold text-emerald-400' : 'text-slate-300'}>
           {round(done)}
-          {unit} / {target}
-          {ceiling ? `–${ceiling}` : ''}
+          {unit} / {round(target)}
+          {ceiling ? `–${round(ceiling)}` : ''}
           {unit}
         </span>
       </div>
       <div className="h-2.5 overflow-hidden rounded-full bg-slate-800">
         <div
-          className={`h-full ${hitFloor ? 'bg-emerald-500' : 'bg-amber-500'}`}
+          className={`h-full transition-[width] duration-700 ease-out ${hitFloor ? 'bg-emerald-500' : 'bg-amber-500'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
     </div>
   );
-}
-
-function weekWeightAvg(state, anyISO) {
-  const vals = weekDates(fromISO(anyISO))
-    .map((iso) => state.log[iso]?.weight)
-    .filter((w) => typeof w === 'number');
-  if (!vals.length) return null;
-  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
 }
 
 function round(n) {
