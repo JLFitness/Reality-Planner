@@ -114,6 +114,16 @@ export function rangeStats(state, from, to) {
   };
 }
 
+// The most recent weigh-ins (oldest→newest), each as { iso, value }. Used for the
+// Review weight trend so logged weights always show, independent of the score range.
+export function recentWeights(state, limit = 30) {
+  return Object.keys(state.log || {})
+    .filter((iso) => typeof state.log[iso]?.weight === 'number')
+    .sort()
+    .slice(-limit)
+    .map((iso) => ({ iso, value: state.log[iso].weight }));
+}
+
 // Average logged weight over a date range, or null if nothing logged.
 export function weightAvgRange(state, from, to) {
   let iso = from;

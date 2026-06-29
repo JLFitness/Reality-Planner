@@ -17,7 +17,7 @@ import {
   monthLabel,
   yearOf,
 } from '../lib/time.js';
-import { dayScore, floorStreak, rangeStats, weightAvgRange, targetActualsRange } from '../lib/scoring.js';
+import { dayScore, floorStreak, rangeStats, weightAvgRange, recentWeights, targetActualsRange } from '../lib/scoring.js';
 import { Card, Empty } from '../components/ui.jsx';
 import BarChart, { LineChart } from '../components/Chart.jsx';
 
@@ -102,11 +102,22 @@ export default function Review() {
   const view = reviewView(state, range, anchor);
   const summary = rangeStats(state, view.from, view.to);
   const streak = floorStreak(state);
-  const periodWeight = weightAvgRange(state, view.from, view.to);
   const actuals = targetActualsRange(state, view.from, view.to);
 
   const wk = weekKey(fromISO(anchor));
   const note = state.reviews[wk] || '';
+
+  // Weight is a long-term trend, so it shows your recent weigh-ins regardless of
+  // the score range above — otherwise weights logged in another week wouldn't show.
+  const weights = recentWeights(state, 30);
+  const weightSeries = weights.map((w) => {
+    const d = fromISO(w.iso);
+    return { label: `${d.getDate()}/${d.getMonth() + 1}`, value: w.value };
+  });
+  const enoughWeight = weightSeries.length >= 2;
+  const weightAvg = weights.length
+    ? Math.round((weights.reduce((a, w) => a + w.value, 0) / weights.length) * 10) / 10
+    : null;
 
   const step = (dir) => {
     if (range === 'week') setAnchor(addDaysISO(anchor, dir * 7));
@@ -116,9 +127,6 @@ export default function Review() {
     setRange(r);
     setAnchor(todayISO());
   };
-
-  const weightSeries = view.buckets.map((b) => ({ label: b.label, value: b.weight }));
-  const enoughWeight = weightSeries.filter((w) => w.value != null).length >= 2;
 
   return (
     <div className="space-y-4 stagger">
@@ -236,7 +244,7 @@ export default function Review() {
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">Weight</h2>
-          {periodWeight != null && <span className="text-sm text-slate-400">avg {periodWeight}</span>}
+          {weightAvg != null && <span className="text-sm text-slate-400">recent avg {weightAvg}</span>}
         </div>
         {enoughWeight ? (
           <LineChart data={weightSeries} />
