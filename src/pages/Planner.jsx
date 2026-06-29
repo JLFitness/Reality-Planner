@@ -14,9 +14,9 @@ import {
   mondayOf,
 } from '../lib/time.js';
 import { plannerStats, cutSuggestions } from '../lib/planner.js';
-import { weekCommitments, isSleep } from '../lib/week.js';
+import { weekCommitments, isSleep, dedupeTasks } from '../lib/week.js';
 import { dayBreakdown, spareLabel } from '../lib/timeline.js';
-import { categoryColor, tint } from '../lib/colors.js';
+import { categoryColor, tint, FIXED_COLOR } from '../lib/colors.js';
 import DayBoard from '../components/DayTimeline.jsx';
 import {
   Card,
@@ -257,7 +257,7 @@ function Cuts({ wk }) {
                 {catName(state, t.categoryId)} · {hrs(t.hours)}h
               </span>
             </span>
-            <Btn variant="danger" onClick={() => actions.removeTask(t.id)} className="!min-h-9 !px-3">
+            <Btn variant="danger" onClick={() => actions.removeTaskLike(t.id)} className="!min-h-9 !px-3">
               Cut
             </Btn>
           </li>
@@ -303,8 +303,14 @@ function WeekOverview({ stats, wk, selectedDay, setSelectedDay, pending, setPend
       )}
       {stats.days.map((d) => {
         const segs = dayBreakdown(state, d.di, wk);
-        const planned = d.planned * 60;
-        const scaleMax = Math.max(d.available * 60, planned, 1);
+        const committedMin = d.committed * 60;
+        const taskMin = d.planned * 60;
+        // The bar represents the whole waking window, so fixed commitments (grey)
+        // and tasks (category colours) both show how full the day is.
+        const wakingMin = (d.committed + d.free) * 60;
+        const scaleMax = Math.max(wakingMin, committedMin + taskMin, 1);
+        // Marker = the point past which you'd eat into your protected buffer.
+        const fullPct = Math.min(100, ((committedMin + d.available * 60) / scaleMax) * 100);
         const active = selectedDay === d.di;
         const over = d.leftover < -0.05;
         const past = d.past;
@@ -337,6 +343,12 @@ function WeekOverview({ stats, wk, selectedDay, setSelectedDay, pending, setPend
             <span className="w-8 shrink-0 text-xs font-medium text-slate-300">{d.name}</span>
             <span className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-slate-800">
               <span className="flex h-full">
+                {committedMin > 0 && (
+                  <span
+                    className="transition-[width] duration-500 ease-out"
+                    style={{ width: `${(committedMin / scaleMax) * 100}%`, backgroundColor: FIXED_COLOR }}
+                  />
+                )}
                 {segs.map((sg) => (
                   <span
                     key={sg.categoryId}
@@ -348,7 +360,7 @@ function WeekOverview({ stats, wk, selectedDay, setSelectedDay, pending, setPend
               {!past && (
                 <span
                   className="absolute top-0 h-full w-px bg-slate-400/60"
-                  style={{ left: `${Math.min(100, ((d.available * 60) / scaleMax) * 100)}%` }}
+                  style={{ left: `${fullPct}%` }}
                 />
               )}
             </span>
@@ -474,6 +486,10 @@ function Legend() {
           {p.name}
         </span>
       ))}
+      <span className="flex items-center gap-1">
+        <Dot color={FIXED_COLOR} />
+        Commitments
+      </span>
     </div>
   );
 }
@@ -586,7 +602,8 @@ function Tasks({ selectedDay, wk }) {
 
   const today = todayISO();
   const repeat = state.settings.repeatCommitments;
-  const tasks = state.tasks.filter((t) => repeat || t.weekStart === wk).sort((a, b) => a.day - b.day);
+  const filtered = state.tasks.filter((t) => repeat || t.weekStart === wk);
+  const tasks = (repeat ? dedupeTasks(filtered) : filtered).sort((a, b) => a.day - b.day);
   const addPast = addDaysISO(wk, selectedDay) < today;
 
   return (
@@ -650,7 +667,7 @@ function Tasks({ selectedDay, wk }) {
                       </span>
                     </span>
                   </button>
-                  <IconBtn aria-label="Delete" onClick={() => actions.removeTask(t.id)}>
+                  <IconBtn aria-label="Delete" onClick={() => actions.removeTaskLike(t.id)}>
                     ✕
                   </IconBtn>
                   <IconBtn

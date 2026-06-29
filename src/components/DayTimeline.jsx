@@ -90,7 +90,7 @@ export default function DayBoard({ di, interactive = false, dragHighlight = fals
       if (draggedRef.current) {
         if (wantRemove(ev)) {
           if (isCommit) actions.removeCommitment(id);
-          else actions.removeTask(id);
+          else actions.removeTaskLike(id);
         } else {
           const desired = yToMin(ev.clientY) - grab;
           const slot = findDropStart(state, di, id, desired, durMin, weekStart);
@@ -396,7 +396,7 @@ function TaskEditor({ task, di, onClose }) {
           <Btn
             variant="danger"
             onClick={() => {
-              actions.removeTask(task.id);
+              actions.removeTaskLike(task.id);
               onClose();
             }}
           >

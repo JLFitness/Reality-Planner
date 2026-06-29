@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useStore } from '../store.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { useStore, useSync } from '../store.jsx';
 import {
   DAYS,
   dayIndex,
@@ -47,9 +47,15 @@ export default function Today() {
 
   // Next-day rollover: when the app opens on a new day, surface yesterday's loose
   // ends. Also offer today's reward and prompt the choice (after any rollover).
+  // Waits for the cloud pull to finish (`hydrated`) so two devices don't each roll
+  // their own reward, and rollover reads the synced log rather than stale local data.
+  const { hydrated } = useSync();
+  const didInit = useRef(false);
   const [rollover, setRollover] = useState(null);
   const [rewardOpen, setRewardOpen] = useState(false);
   useEffect(() => {
+    if (!hydrated || didInit.current) return;
+    didInit.current = true;
     const today = todayISO();
     const last = state.lastOpened;
     let hadRollover = false;
@@ -73,7 +79,7 @@ export default function Today() {
     if (pool.length && !tr) actions.offerRewards(today, pickRewards(pool, 3));
     if (pool.length && !(tr && tr.chosen) && !hadRollover) setRewardOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hydrated]);
 
   // When the rollover modal closes, fall through to the reward chooser if needed.
   const closeRollover = () => {
@@ -510,7 +516,7 @@ function RolloverModal({ rollover, onClose }) {
                 variant="danger"
                 className="!px-3"
                 onClick={() => {
-                  actions.removeTask(t.id);
+                  actions.removeTaskLike(t.id);
                   resolve(t.id);
                 }}
               >

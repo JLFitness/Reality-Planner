@@ -10,6 +10,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { makeDefaults, makeSleepBlocks, uid } from './lib/defaults.js';
 import { colorForIndex } from './lib/colors.js';
 import { addClock, weekKey, addDaysISO } from './lib/time.js';
+import { taskKey } from './lib/week.js';
 import { supabase, supabaseEnabled, TABLE } from './lib/supabase.js';
 
 const KEY = 'reality-planner-state-v1';
@@ -80,6 +81,10 @@ export function StoreProvider({ children }) {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(!supabaseEnabled);
   const [status, setStatus] = useState(supabaseEnabled ? 'syncing' : 'local');
+  // True once the first cloud pull has resolved (or immediately when sync is off).
+  // Things that must not run on stale local data (e.g. offering the daily reward)
+  // wait for this so two devices don't each roll their own.
+  const [hydrated, setHydrated] = useState(!supabaseEnabled);
 
   const stateRef = useRef(state);
   const sessionRef = useRef(null);
@@ -163,6 +168,28 @@ export function StoreProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
+  // Mobile browsers suspend/kill a backgrounded tab, so the 700ms debounced push
+  // often never fires when you switch apps. Flush any pending save the moment the
+  // page is hidden (or unloaded) so phone edits actually reach the cloud.
+  useEffect(() => {
+    if (!supabaseEnabled) return undefined;
+    const flush = () => {
+      if (!sessionRef.current || !readyRef.current) return;
+      clearTimeout(pushTimer.current);
+      doPush(stateRef.current);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function pull() {
     const sess = sessionRef.current;
     if (!sess) return;
@@ -191,6 +218,8 @@ export function StoreProvider({ children }) {
     } catch {
       readyRef.current = true;
       setStatus(navigator.onLine ? 'error' : 'offline');
+    } finally {
+      setHydrated(true);
     }
   }
 
@@ -261,6 +290,16 @@ export function StoreProvider({ children }) {
     updateTask: (id, patch) =>
       mutate((s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
     removeTask: (id) => mutate((s) => ({ ...s, tasks: s.tasks.filter((t) => t.id !== id) })),
+    // Delete a task from the UI. In repeat mode a routine task can exist as several
+    // per-week records, so remove every copy — otherwise a hidden twin reappears.
+    removeTaskLike: (id) =>
+      mutate((s) => {
+        const target = s.tasks.find((t) => t.id === id);
+        if (!target) return s;
+        if (!s.settings.repeatCommitments) return { ...s, tasks: s.tasks.filter((t) => t.id !== id) };
+        const k = taskKey(target);
+        return { ...s, tasks: s.tasks.filter((t) => taskKey(t) !== k) };
+      }),
     // Clone a week's tasks (and per-week commitments) forward to the next week.
     copyWeekToNext: (wk) =>
       mutate((s) => {
@@ -463,6 +502,7 @@ export function StoreProvider({ children }) {
   const sync = {
     enabled: supabaseEnabled,
     ready: authReady,
+    hydrated,
     session,
     status,
     email: session?.user?.email || null,
