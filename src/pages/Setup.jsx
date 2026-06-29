@@ -596,10 +596,11 @@ function Planning() {
   return (
     <label className="flex cursor-pointer items-start justify-between gap-3">
       <span>
-        <span className="block text-sm font-medium text-slate-200">Repeat fixed commitments every week</span>
+        <span className="block text-sm font-medium text-slate-200">Repeat my weekly plan every week</span>
         <span className="mt-0.5 block text-xs text-slate-500">
-          On: your routine (work, meals, training) shows on every week automatically. Off: plan
-          commitments separately per week. Sleep always repeats either way.
+          On: your routine — tasks and fixed commitments — shows on every week automatically, and
+          your daily scores build up over time. Off: plan each week separately. Sleep always repeats
+          either way.
         </span>
       </span>
       <input

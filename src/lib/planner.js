@@ -18,7 +18,7 @@ export function plannerStats(state, wk = weekKey(new Date())) {
     const free = Math.max(0, 24 - committed);
     const buffer = free * bufferPct; // protected safety net
     const available = Math.max(0, free - buffer); // schedulable time
-    const planned = weekTasks(tasks, di, wk)
+    const planned = weekTasks(tasks, di, wk, repeat)
       .reduce((s, t) => s + (Number(t.hours) || 0), 0);
     const leftover = available - planned; // negative = overflow
     const past = addDaysISO(wk, di) < today; // locked once that calendar day has passed
@@ -64,9 +64,10 @@ export function cutSuggestions(state, wk = weekKey(new Date())) {
   });
 
   // Days of this week that haven't passed yet.
+  const repeat = state.settings.repeatCommitments;
   const futureDays = new Set(stats.days.filter((d) => !d.past).map((d) => d.di));
   const candidates = state.tasks
-    .filter((t) => t.kind === 'ceiling' && t.weekStart === wk && futureDays.has(t.day))
+    .filter((t) => t.kind === 'ceiling' && (repeat || t.weekStart === wk) && futureDays.has(t.day))
     .sort(
       (a, b) =>
         (rankOf[b.categoryId] ?? -1) - (rankOf[a.categoryId] ?? -1) ||

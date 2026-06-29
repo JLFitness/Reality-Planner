@@ -432,9 +432,10 @@ function DayCard({ di, stats, wk, dragHighlight = false }) {
   const d = stats.days[di];
   const over = d.leftover < -0.05;
   const past = d.past;
+  const repeat = state.settings.repeatCommitments;
   const hasItems =
-    state.tasks.some((t) => t.day === di && t.weekStart === wk) ||
-    weekCommitments(state.commitments, di, wk, state.settings.repeatCommitments).some((c) => !isSleep(c));
+    state.tasks.some((t) => t.day === di && (repeat || t.weekStart === wk)) ||
+    weekCommitments(state.commitments, di, wk, repeat).some((c) => !isSleep(c));
   return (
     <Panel title={DAY_LONG[di]} subtitle={`${hrs(d.committed)}h committed · ${hrs(d.planned)}h planned`}>
       <div className="mb-3 flex items-center justify-between">
@@ -584,7 +585,8 @@ function Tasks({ selectedDay, wk }) {
   };
 
   const today = todayISO();
-  const tasks = state.tasks.filter((t) => t.weekStart === wk).sort((a, b) => a.day - b.day);
+  const repeat = state.settings.repeatCommitments;
+  const tasks = state.tasks.filter((t) => repeat || t.weekStart === wk).sort((a, b) => a.day - b.day);
   const addPast = addDaysISO(wk, selectedDay) < today;
 
   return (

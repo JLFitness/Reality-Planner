@@ -38,7 +38,7 @@ export default function Today() {
   const dlog = state.log[iso] || { golden: {}, tasks: {} };
   const score = dayScore(state, iso);
 
-  const dayTasks = weekTasks(state.tasks, di, wk);
+  const dayTasks = weekTasks(state.tasks, di, wk, state.settings.repeatCommitments);
   const floorTasks = dayTasks.filter((t) => t.kind === 'floor');
   const ceilTasks = dayTasks.filter((t) => t.kind === 'ceiling');
   const hasSchedule =
@@ -57,7 +57,7 @@ export default function Today() {
       const prev = addDaysISO(today, -1);
       const pdi = dayIndex(fromISO(prev));
       const plog = state.log[prev] || { tasks: {} };
-      const items = weekTasks(state.tasks, pdi, weekKey(fromISO(prev))).filter(
+      const items = weekTasks(state.tasks, pdi, weekKey(fromISO(prev)), state.settings.repeatCommitments).filter(
         (t) => !isTaskDone(t, plog.tasks?.[t.id])
       );
       if (items.length) {

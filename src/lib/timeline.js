@@ -46,7 +46,7 @@ export function occupiedRanges(state, di, excludeId, wk = DEFAULT_WK()) {
     const { start, end } = commitmentSpan(c);
     out.push({ start: clamp(start, W0, W1), end: clamp(end, W0, W1) });
   }
-  for (const t of weekTasks(state.tasks, di, wk).filter((t) => t.start && t.id !== excludeId)) {
+  for (const t of weekTasks(state.tasks, di, wk, repeat).filter((t) => t.start && t.id !== excludeId)) {
     const s = toMinutes(t.start);
     out.push({ start: clamp(s, W0, W1), end: clamp(s + (Number(t.hours) || 0) * 60, W0, W1) });
   }
@@ -163,7 +163,7 @@ export function dayLayout(state, di, wk = DEFAULT_WK()) {
     .filter((c) => c.bottom - c.top > 0.5)
     .sort((a, b) => a.top - b.top);
 
-  const dayTasks = weekTasks(state.tasks, di, wk);
+  const dayTasks = weekTasks(state.tasks, di, wk, repeat);
   const anchored = dayTasks
     .filter((t) => t.start)
     .map((t) => {
@@ -259,7 +259,8 @@ export function dayLayout(state, di, wk = DEFAULT_WK()) {
 // Per-category planned minutes for a day, for the colour-coded overview bar.
 export function dayBreakdown(state, di, wk = DEFAULT_WK()) {
   const byCat = new Map();
-  for (const t of weekTasks(state.tasks, di, wk)) {
+  const repeat = state.settings.repeatCommitments;
+  for (const t of weekTasks(state.tasks, di, wk, repeat)) {
     const min = (Number(t.hours) || 0) * 60;
     byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + min);
   }

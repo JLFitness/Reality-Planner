@@ -20,7 +20,7 @@ export function dayScore(state, iso) {
   const wk = weekKey(fromISO(iso));
   const dlog = state.log[iso] || { golden: {}, tasks: {} };
   const golden = state.golden;
-  const dayTasks = weekTasks(state.tasks, di, wk);
+  const dayTasks = weekTasks(state.tasks, di, wk, state.settings.repeatCommitments);
   const floorTasks = dayTasks.filter((t) => t.kind === 'floor');
   const ceilTasks = dayTasks.filter((t) => t.kind === 'ceiling');
 
@@ -134,6 +134,7 @@ export function weightAvgRange(state, from, to) {
 // per-week target is scaled by the number of weeks elsewhere.
 export function targetActualsRange(state, from, to) {
   const nameOf = (id) => (state.priorities.find((p) => p.id === id) || {}).name || '—';
+  const repeat = state.settings.repeatCommitments;
   return state.targets.map((tgt) => {
     let done = 0;
     let iso = from;
@@ -141,7 +142,7 @@ export function targetActualsRange(state, from, to) {
       const di = dayIndex(fromISO(iso));
       const wk = weekKey(fromISO(iso));
       const dlog = state.log[iso] || { tasks: {} };
-      for (const t of weekTasks(state.tasks, di, wk).filter((tk) => tk.categoryId === tgt.categoryId)) {
+      for (const t of weekTasks(state.tasks, di, wk, repeat).filter((tk) => tk.categoryId === tgt.categoryId)) {
         const entry = dlog.tasks?.[t.id];
         const isDone = isTaskDone(t, entry);
         if (tgt.metric === 'hours' && isDone) done += Number(t.hours) || 0;
@@ -162,6 +163,7 @@ export function targetActualsRange(state, from, to) {
 export function targetActuals(state, anyISO) {
   const dates = weekDates(fromISO(anyISO));
   const nameOf = (id) => (state.priorities.find((p) => p.id === id) || {}).name || '—';
+  const repeat = state.settings.repeatCommitments;
 
   return state.targets.map((tgt) => {
     let done = 0;
@@ -169,7 +171,7 @@ export function targetActuals(state, anyISO) {
       const di = dayIndex(fromISO(iso));
       const wk = weekKey(fromISO(iso));
       const dlog = state.log[iso] || { tasks: {} };
-      for (const t of weekTasks(state.tasks, di, wk).filter((tk) => tk.categoryId === tgt.categoryId)) {
+      for (const t of weekTasks(state.tasks, di, wk, repeat).filter((tk) => tk.categoryId === tgt.categoryId)) {
         const entry = dlog.tasks?.[t.id];
         const isDone = isTaskDone(t, entry);
         if (tgt.metric === 'hours' && isDone) done += Number(t.hours) || 0;
